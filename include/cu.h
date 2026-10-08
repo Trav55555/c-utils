@@ -168,4 +168,46 @@ void cu_sb_hex(CuBuilder *b, unsigned long v, size_t min_digits);
  * and returns 0 if any append failed. */
 CU_MUST_USE int cu_sb_finish(CuBuilder *b, CuStr *out);
 
+/* ---- Growable array ---------------------------------------------------- */
+
+/* Elements of one type, stored in an arena. Use the CU_VEC_* macros: each
+ * passes sizeof the element type at the call site, and a size that does not
+ * match the vector's element size aborts, so most type mix-ups are caught.
+ * Pushes never fail loudly: a failure marks the vector, the push is skipped,
+ * and cu_vec_failed reports it. Growth moves the elements, so pointers from
+ * CU_VEC_AT and CU_VEC_DATA are valid only until the next push or reserve. */
+typedef struct CuVec {
+    CuArena *arena;
+    char *data;
+    size_t len;
+    size_t cap;
+    size_t elem_size;
+    int failed;
+} CuVec;
+
+#define CU_VEC_INIT(v, a, T) cu_vec_init((v), (a), sizeof(T))
+/* Copies *p onto the end. */
+#define CU_VEC_PUSH(v, p) cu_vec_push_((v), (p), sizeof *(p))
+/* Copies the last element into *p and removes it; returns 0 if empty. */
+#define CU_VEC_POP(v, p) cu_vec_pop_((v), (p), sizeof *(p))
+/* Pointer to element i; aborts when i >= len. */
+#define CU_VEC_AT(v, T, i) ((T *)cu_vec_at_((v), (i), sizeof(T)))
+/* Pointer to the first element, for loops over 0..len. Never NULL. */
+#define CU_VEC_DATA(v, T) ((T *)cu_vec_data_((v), sizeof(T)))
+
+/* elem_size 0 aborts. */
+void cu_vec_init(CuVec *v, CuArena *a, size_t elem_size);
+/* Room for at least extra more elements without moving. Returns 0 and marks
+ * the vector failed on overflow or out of memory. */
+int cu_vec_reserve(CuVec *v, size_t extra);
+size_t cu_vec_len(const CuVec *v);
+int cu_vec_failed(const CuVec *v);
+/* Sets len to 0 and keeps the storage. */
+void cu_vec_clear(CuVec *v);
+
+void cu_vec_push_(CuVec *v, const void *elem, size_t elem_size);
+int cu_vec_pop_(CuVec *v, void *out, size_t elem_size);
+void *cu_vec_at_(const CuVec *v, size_t i, size_t elem_size);
+void *cu_vec_data_(const CuVec *v, size_t elem_size);
+
 #endif

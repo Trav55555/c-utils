@@ -13,6 +13,7 @@ Next, in order:
 3. **Hash trie map keyed by `CuStr`.** Arena-backed (Wellons' design): no rehash, stable entry pointers, nothing freed individually.
 4. **Pool with generational handles.** `{index, generation}` handles for long-lived objects: a stale handle is reported, never dereferenced.
 5. **`regions` check.** Static check for arena lifetime bugs (design: `dependable-c-agent-toolchain/docs/REGIONS.md`). This repo is its first real target.
+6. **Plex datatype.** TODO: support a plex datatype. Scope not yet defined.
 
 ## 2. Platform module
 
