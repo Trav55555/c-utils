@@ -57,10 +57,59 @@ static void end_scope_after_release(void)
     cu_temp_end(t);
 }
 
+static void write_value(void (*write)(CuBuilder *, unsigned long), unsigned long v)
+{
+    CuArena a;
+    CuBuilder b;
+
+    cu_arena_init(&a);
+    cu_sb_init(&b, &a);
+    write(&b, v);
+    cu_arena_release(&a);
+}
+
+static void u8_too_large(void)
+{
+    write_value(cu_sb_u8, 0x100UL);
+}
+
+static void u16le_too_large(void)
+{
+    write_value(cu_sb_u16le, 0x10000UL);
+}
+
+static void u16be_too_large(void)
+{
+    write_value(cu_sb_u16be, 0x10000UL);
+}
+
+/* 2^32, which only exists where long is wider than 32 bits; zero otherwise. */
+static unsigned long two_to_32(void)
+{
+    return (1UL << 16) << 16;
+}
+
+static void u32le_too_large(void)
+{
+    write_value(cu_sb_u32le, two_to_32());
+}
+
+static void u32be_too_large(void)
+{
+    write_value(cu_sb_u32be, two_to_32());
+}
+
 int main(void)
 {
     expect_abort(end_stale_scope_after_reuse);
     expect_abort(end_scope_after_release);
+    expect_abort(u8_too_large);
+    expect_abort(u16le_too_large);
+    expect_abort(u16be_too_large);
+    if (two_to_32() != 0) {
+        expect_abort(u32le_too_large);
+        expect_abort(u32be_too_large);
+    }
     return 0;
 }
 #else

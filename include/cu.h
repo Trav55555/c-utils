@@ -171,6 +171,30 @@ void cu_sb_hex(CuBuilder *b, unsigned long v, size_t min_digits);
  * and returns 0 if any append failed. */
 CU_MUST_USE int cu_sb_finish(CuBuilder *b, CuStr *out);
 
+/* ---- Binary reading and writing ------------------------------------- */
+
+/* Fixed-width unsigned integers in little (le) or big (be) endian order,
+ * read from s at *pos. On success each reader stores the value in *out,
+ * advances *pos past the bytes read, and returns 1. If fewer bytes remain,
+ * or *pos > s.len, it returns 0 and leaves *pos and *out unchanged. Bytes
+ * are assembled arithmetically, so input alignment and host byte order do
+ * not matter. */
+CU_MUST_USE int cu_rd_u8(CuStr s, size_t *pos, unsigned long *out);
+CU_MUST_USE int cu_rd_u16le(CuStr s, size_t *pos, unsigned long *out);
+CU_MUST_USE int cu_rd_u16be(CuStr s, size_t *pos, unsigned long *out);
+CU_MUST_USE int cu_rd_u32le(CuStr s, size_t *pos, unsigned long *out);
+CU_MUST_USE int cu_rd_u32be(CuStr s, size_t *pos, unsigned long *out);
+/* The next n bytes as a view into s, under the same rules. */
+CU_MUST_USE int cu_rd_bytes(CuStr s, size_t *pos, size_t n, CuStr *out);
+
+/* Append v in the given width and byte order. A v that does not fit the
+ * width aborts. Failure is sticky, as for every builder append. */
+void cu_sb_u8(CuBuilder *b, unsigned long v);
+void cu_sb_u16le(CuBuilder *b, unsigned long v);
+void cu_sb_u16be(CuBuilder *b, unsigned long v);
+void cu_sb_u32le(CuBuilder *b, unsigned long v);
+void cu_sb_u32be(CuBuilder *b, unsigned long v);
+
 /* ---- Growable array ---------------------------------------------------- */
 
 /* Elements of one type, stored in an arena. Use the CU_VEC_* macros: each

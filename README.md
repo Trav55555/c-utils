@@ -11,6 +11,8 @@ Safe, fast primitives for [Dependable C](https://dependablec.org/) (the C89 subs
 | `sprintf` overflows and format mismatches | `CuBuilder`: typed appends, no format strings |
 | `atoi`/`strtol` silent failures | `cu_parse_ulong`/`cu_parse_long`: whole-string, overflow-checked, ok flag |
 | `<ctype.h>` UB on negative `char` and locale surprises | `cu_ascii_*` |
+| Pointer casts, misaligned loads and sign extension in binary formats | `cu_rd_u32le` and friends read bounds-checked, endian-explicit integers from a `CuStr`; `cu_sb_u32le` and friends write them |
+| Growable arrays that overrun or mix element types | `CuVec`: arena-backed growth, element size checked at every call |
 | Ignored errors | `CU_MUST_USE` on every fallible call; failures are sticky so one check covers a sequence |
 
 Error policy, memory policy and every function's contract are at the top of `include/cu.h`.

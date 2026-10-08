@@ -4,16 +4,15 @@ Each item is one slice that passes `make check` (and `make deep` before it is ca
 
 ## 1. Core (this repo)
 
-Done: arena + temp scopes + scratch arenas, debug arena mode, checked size math, `CuStr`, ASCII, parsing, string builder.
+Done: arena + temp scopes + scratch arenas, debug arena mode, checked size math, `CuStr`, ASCII, parsing, string builder, `CuVec`, byte readers and writers (8, 16 and 32 bits, both byte orders). 64-bit readers wait for a 64-bit type: C89 has none, and `unsigned long` is 32 bits on Windows and wasm32.
 
 Next, in order:
 
-1. **`CuSlice` and `CuVec`.** Typed views and growable arrays over `elem_size`, bounds-checked `at`, arena-backed growth. Thin typed wrappers for hot types.
-2. **Byte readers and writers.** `cu_rd_u32le(CuStr, &pos, &out)` and friends: bounds-checked, no pointer casts, so no aliasing or alignment UB in binary formats. Widen each byte to the result type before shifting: `(unsigned long)b[3] << 24`, never `b[3] << 24`, because `unsigned char` promotes to signed `int` and `0xFF << 24` overflows it. Test with every byte `0xFF` under UBSan and CBMC.
-3. **Hash trie map keyed by `CuStr`.** Arena-backed (Wellons' design): no rehash, stable entry pointers, nothing freed individually.
-4. **Pool with generational handles.** `{index, generation}` handles for long-lived objects: a stale handle is reported, never dereferenced.
-5. **`regions` check.** Static check for arena lifetime bugs (design: `dependable-c-agent-toolchain/docs/REGIONS.md`). This repo is its first real target.
-6. **Plex.** Linked structure in the Ross/Knuth sense: nodes whose fields point at each other in any shape (graphs, cycles, back links), not just lists or trees. Nodes live in an arena; links are typed indices rather than raw pointers, so a dangling or wrong-type link is reported, never followed. Builds on the arena and on the pool's generational handles (item 4).
+1. **`CuSlice`.** Typed views over `elem_size` with bounds-checked `at`, as `CuStr` is for bytes. Thin typed wrappers for hot types.
+2. **Hash trie map keyed by `CuStr`.** Arena-backed (Wellons' design): no rehash, stable entry pointers, nothing freed individually.
+3. **Pool with generational handles.** `{index, generation}` handles for long-lived objects: a stale handle is reported, never dereferenced.
+4. **`regions` check.** Static check for arena lifetime bugs (design: `dependable-c-agent-toolchain/docs/REGIONS.md`). This repo is its first real target.
+5. **Plex.** Linked structure in the Ross/Knuth sense: nodes whose fields point at each other in any shape (graphs, cycles, back links), not just lists or trees. Nodes live in an arena; links are typed indices rather than raw pointers, so a dangling or wrong-type link is reported, never followed. Builds on the arena and on the pool's generational handles (item 3).
 
 ## 2. Platform module
 
