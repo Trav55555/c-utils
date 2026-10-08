@@ -267,4 +267,62 @@ CuSlice cu_slice_n_(void *p, size_t n, size_t elem_size);
 void *cu_slice_at_(CuSlice s, size_t i, size_t elem_size);
 void *cu_slice_data_(CuSlice s, size_t elem_size);
 
+/* ---- Hash map ---------------------------------------------------------- */
+
+/* 32-bit FNV-1a of s's bytes. */
+unsigned long cu_hash_fnv1a(CuStr s);
+
+/* A hash trie (Wellons' design) from CuStr keys to values of one type, in
+ * an arena. Each node has four children chosen by successive 2-bit slices
+ * of the key's hash: nothing is rehashed, entries never move, and nothing
+ * is freed individually. Keys are copied into the arena. There is no
+ * removal. Value pointers stay valid until the arena is released or a temp
+ * scope that was open at insertion ends.
+ *
+ * Cost per call is the trie's depth, logarithmic for ordinary keys. Keys
+ * whose 32-bit hashes are equal share one path that ends in a list, so n
+ * such keys cost O(n) each; FNV-1a collisions are easy to construct, so
+ * bound the number of keys taken from untrusted input.
+ *
+ * As with CuVec, use the CU_MAP_* macros: a size that does not match the
+ * map's value size aborts. A failed insertion marks the map; after that no
+ * new key is inserted, existing keys are still found, and cu_map_failed
+ * reports it. */
+typedef struct CuMapNode CuMapNode;
+
+typedef struct CuMap {
+    CuArena *arena;
+    CuMapNode *root;
+    CuMapNode *first; /* insertion order, for iteration */
+    CuMapNode *last;
+    size_t len;
+    size_t value_size;
+    int failed;
+} CuMap;
+
+typedef struct CuMapIter {
+    CuMapNode *node;
+    size_t value_size;
+} CuMapIter;
+
+#define CU_MAP_INIT(m, a, T) cu_map_init((m), (a), sizeof(T))
+/* Pointer to key's value. A new key is first inserted with a copy of *p.
+ * Returns NULL if a new key cannot be inserted. */
+#define CU_MAP_UPSERT(m, T, key, p) ((T *)cu_map_upsert_((m), (key), (p), sizeof *(p), sizeof(T)))
+/* Pointer to key's value, or NULL if key is absent. */
+#define CU_MAP_GET(m, T, key) ((T *)cu_map_get_((m), (key), sizeof(T)))
+/* The next entry in insertion order: stores its key in *key and returns a
+ * pointer to its value, or returns NULL at the end. */
+#define CU_MAP_NEXT(it, T, key) ((T *)cu_map_next_((it), (key), sizeof(T)))
+
+/* value_size 0 aborts. */
+void cu_map_init(CuMap *m, CuArena *a, size_t value_size);
+size_t cu_map_len(const CuMap *m);
+int cu_map_failed(const CuMap *m);
+CuMapIter cu_map_iter(const CuMap *m);
+
+void *cu_map_upsert_(CuMap *m, CuStr key, const void *init, size_t init_size, size_t value_size);
+void *cu_map_get_(const CuMap *m, CuStr key, size_t value_size);
+void *cu_map_next_(CuMapIter *it, CuStr *key, size_t value_size);
+
 #endif

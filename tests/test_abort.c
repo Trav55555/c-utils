@@ -152,6 +152,110 @@ static void slice_zero_size(void)
     (void)cu_slice_n_(arr, 1, 0);
 }
 
+/* Runs one map call on a map of longs holding "k". */
+static void with_long_map(void (*call)(CuMap *))
+{
+    CuArena a;
+    CuMap m;
+    long init;
+
+    cu_arena_init(&a);
+    CU_MAP_INIT(&m, &a, long);
+    init = 1;
+    if (CU_MAP_UPSERT(&m, long, CU_LIT("k"), &init) != NULL)
+        call(&m);
+    cu_arena_release(&a);
+}
+
+static void get_wrong_type(CuMap *m)
+{
+    (void)CU_MAP_GET(m, char, CU_LIT("k"));
+}
+
+static void upsert_wrong_type(CuMap *m)
+{
+    long init;
+
+    init = 1;
+    (void)CU_MAP_UPSERT(m, char, CU_LIT("k"), &init);
+}
+
+static void upsert_wrong_init(CuMap *m)
+{
+    char init;
+
+    init = 1;
+    (void)CU_MAP_UPSERT(m, long, CU_LIT("new"), &init);
+}
+
+static void next_wrong_type(CuMap *m)
+{
+    CuMapIter it;
+    CuStr key;
+
+    it = cu_map_iter(m);
+    (void)CU_MAP_NEXT(&it, char, &key);
+}
+
+static void map_get_wrong_type(void)
+{
+    with_long_map(get_wrong_type);
+}
+
+static void map_upsert_wrong_type(void)
+{
+    with_long_map(upsert_wrong_type);
+}
+
+static void map_upsert_wrong_init(void)
+{
+    with_long_map(upsert_wrong_init);
+}
+
+static void map_next_wrong_type(void)
+{
+    with_long_map(next_wrong_type);
+}
+
+static void upsert_null_init(CuMap *m)
+{
+    (void)cu_map_upsert_(m, CU_LIT("new"), NULL, sizeof(long), sizeof(long));
+}
+
+static void next_null_key(CuMap *m)
+{
+    CuMapIter it;
+
+    it = cu_map_iter(m);
+    (void)cu_map_next_(&it, NULL, sizeof(long));
+}
+
+static void map_upsert_null_init(void)
+{
+    with_long_map(upsert_null_init);
+}
+
+static void map_next_null_key(void)
+{
+    with_long_map(next_null_key);
+}
+
+static void map_null_arena(void)
+{
+    CuMap m;
+
+    cu_map_init(&m, NULL, sizeof(long));
+}
+
+static void map_zero_size(void)
+{
+    CuArena a;
+    CuMap m;
+
+    cu_arena_init(&a);
+    cu_map_init(&m, &a, 0);
+}
+
 int main(void)
 {
     expect_abort(end_stale_scope_after_reuse);
@@ -165,6 +269,14 @@ int main(void)
     expect_abort(slice_null_with_length);
     expect_abort(slice_size_overflows);
     expect_abort(slice_zero_size);
+    expect_abort(map_get_wrong_type);
+    expect_abort(map_upsert_wrong_type);
+    expect_abort(map_upsert_wrong_init);
+    expect_abort(map_next_wrong_type);
+    expect_abort(map_zero_size);
+    expect_abort(map_upsert_null_init);
+    expect_abort(map_next_null_key);
+    expect_abort(map_null_arena);
     if (two_to_32() != 0) {
         expect_abort(u32le_too_large);
         expect_abort(u32be_too_large);
