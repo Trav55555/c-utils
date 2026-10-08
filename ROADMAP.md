@@ -13,7 +13,7 @@ Next, in order:
 3. **Hash trie map keyed by `CuStr`.** Arena-backed (Wellons' design): no rehash, stable entry pointers, nothing freed individually.
 4. **Pool with generational handles.** `{index, generation}` handles for long-lived objects: a stale handle is reported, never dereferenced.
 5. **`regions` check.** Static check for arena lifetime bugs (design: `dependable-c-agent-toolchain/docs/REGIONS.md`). This repo is its first real target.
-6. **Plex datatype.** TODO: support a plex datatype. Scope not yet defined.
+6. **Plex.** Linked structure in the Ross/Knuth sense: nodes whose fields point at each other in any shape (graphs, cycles, back links), not just lists or trees. Nodes live in an arena; links are typed indices rather than raw pointers, so a dangling or wrong-type link is reported, never followed. Builds on the arena and on the pool's generational handles (item 4).
 
 ## 2. Platform module
 
