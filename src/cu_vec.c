@@ -122,3 +122,58 @@ void *cu_vec_data_(const CuVec *v, size_t elem_size)
         return &empty_storage;
     return v->data;
 }
+
+CuSlice cu_vec_slice(const CuVec *v)
+{
+    CuSlice s;
+
+    if (v == NULL)
+        abort();
+    s.ptr = v->data != NULL ? v->data : (char *)&empty_storage;
+    s.len = v->len;
+    s.elem_size = v->elem_size;
+    return s;
+}
+
+CuSlice cu_slice_n_(void *p, size_t n, size_t elem_size)
+{
+    CuSlice s;
+    size_t bytes;
+
+    if (elem_size == 0 || !cu_size_mul(n, elem_size, &bytes))
+        abort();
+    if (p == NULL) {
+        if (n != 0)
+            abort();
+        p = &empty_storage;
+    }
+    s.ptr = (char *)p;
+    s.len = n;
+    s.elem_size = elem_size;
+    return s;
+}
+
+CuSlice cu_slice_sub(CuSlice s, size_t start, size_t end)
+{
+    if (end > s.len)
+        end = s.len;
+    if (start > end)
+        start = end;
+    s.ptr += start * s.elem_size;
+    s.len = end - start;
+    return s;
+}
+
+void *cu_slice_at_(CuSlice s, size_t i, size_t elem_size)
+{
+    if (elem_size != s.elem_size || i >= s.len)
+        abort();
+    return s.ptr + i * s.elem_size;
+}
+
+void *cu_slice_data_(CuSlice s, size_t elem_size)
+{
+    if (elem_size != s.elem_size)
+        abort();
+    return s.ptr;
+}

@@ -237,4 +237,34 @@ int cu_vec_pop_(CuVec *v, void *out, size_t elem_size);
 void *cu_vec_at_(const CuVec *v, size_t i, size_t elem_size);
 void *cu_vec_data_(const CuVec *v, size_t elem_size);
 
+/* ---- Slices ------------------------------------------------------------ */
+
+/* A view of len elements of elem_size bytes, owned elsewhere; the elements
+ * can be written through it. As with CuVec, use the CU_SLICE_* macros: a
+ * size that does not match the slice's element size aborts. ptr is never
+ * NULL. A slice of a CuVec is valid only until the vector's next push or
+ * reserve. */
+typedef struct CuSlice {
+    char *ptr;
+    size_t len;
+    size_t elem_size;
+} CuSlice;
+
+/* The n elements starting at p, typed by p. p may be NULL only when n is 0;
+ * a size n * sizeof *p that overflows aborts. */
+#define CU_SLICE(p, n) cu_slice_n_((p), (n), sizeof *(p))
+/* Pointer to element i; aborts when i >= len. */
+#define CU_SLICE_AT(s, T, i) ((T *)cu_slice_at_((s), (i), sizeof(T)))
+/* Pointer to the first element, for loops over 0..len. Never NULL. */
+#define CU_SLICE_DATA(s, T) ((T *)cu_slice_data_((s), sizeof(T)))
+
+CuSlice cu_vec_slice(const CuVec *v);
+/* Elements [start, end), with end clamped to len and start clamped to end,
+ * so it never makes a view outside s. */
+CuSlice cu_slice_sub(CuSlice s, size_t start, size_t end);
+
+CuSlice cu_slice_n_(void *p, size_t n, size_t elem_size);
+void *cu_slice_at_(CuSlice s, size_t i, size_t elem_size);
+void *cu_slice_data_(CuSlice s, size_t elem_size);
+
 #endif
