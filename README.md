@@ -1,0 +1,53 @@
+# c-utils
+
+Safe, fast primitives for [Dependable C](https://dependablec.org/) (the C89 subset that `dcheck` enforces). Each primitive removes a class of bugs by construction rather than by care.
+
+| Bug class | Primitive |
+|---|---|
+| Use after free, double free, leaks | `CuArena` with temp scopes and per-thread scratch arenas: no per-object `free` |
+| Overflow in `count * size` | `cu_arena_push(a, count, elem_size)` checks the multiply; `cu_size_add` and `cu_size_mul` for your own sizes |
+| Buffer overruns on strings | `CuStr` views carry their length; slicing clamps; `cu_str_at` aborts out of bounds; `CU_LIT` only accepts literals |
+| `NULL` + length bugs | `CuStr.ptr` is never `NULL` |
+| `sprintf` overflows and format mismatches | `CuBuilder`: typed appends, no format strings |
+| `atoi`/`strtol` silent failures | `cu_parse_ulong`/`cu_parse_long`: whole-string, overflow-checked, ok flag |
+| `<ctype.h>` UB on negative `char` and locale surprises | `cu_ascii_*` |
+| Ignored errors | `CU_MUST_USE` on every fallible call; failures are sticky so one check covers a sequence |
+
+Error policy, memory policy and every function's contract are at the top of `include/cu.h`.
+
+## Example
+
+```c
+#include "cu.h"
+
+/* Returns "name=value" built in the caller's arena. */
+CuStr pair(CuArena *out, CuStr name, unsigned long value)
+{
+    CuBuilder b;
+    CuStr s;
+
+    cu_sb_init(&b, out);
+    cu_sb_str(&b, name);
+    cu_sb_char(&b, '=');
+    cu_sb_ulong(&b, value);
+    if (!cu_sb_finish(&b, &s))
+        return cu_str_empty();
+    return s;
+}
+```
+
+## Debug arenas
+
+With `CU_ARENA_DEBUG` defined, or when built with AddressSanitizer, every push is its own `malloc`. Sanitizers (and Fil-C) then see each object's bounds, and memory from an ended temp scope is really freed, so a stale pointer is reported instead of silently reading reused memory. `cu_arena_init_with(&a, block_size, 1)` turns it on for one arena.
+
+## Checks
+
+```sh
+make check   # dcheck gate: C89 subset, lint, gcc/clang/tcc matrix, analyzer,
+             # ASan+UBSan, MSan, -O2 -flto, wasm32-wasi, coverage >= 90%
+make deep    # + Cerberus, valgrind, libFuzzer, CBMC proofs
+```
+
+`dcheck` lives in `~/projects/dependable-c-agent-toolchain`; override with `make DCHECK=/path/to/dcheck`.
+
+Proofs: `proofs/proof_str.c` proves slicing, find and cut for every string of up to 4 bytes; `proofs/proof_size.c` proves `cu_size_add` for all inputs. `cu_size_mul` is fuzzed against `__builtin_mul_overflow` (`fuzz/fuzz_size.c`) because a 64-bit multiply proof does not finish in CBMC.
