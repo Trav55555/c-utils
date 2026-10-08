@@ -42,6 +42,7 @@ struct CuBlock {
     CuBlock *prev;
     size_t cap;
     size_t used;
+    size_t num; /* 1 for an arena's first block, then counting up */
 };
 
 static CU_THREAD_LOCAL CuArena scratch[CU_SCRATCH_COUNT];
@@ -81,6 +82,7 @@ void cu_arena_init_with(CuArena *a, size_t block_size, int debug)
     a->block_size = block_size;
     a->debug = debug;
     a->failed = 0;
+    a->blocks = 0;
 }
 
 void cu_arena_init(CuArena *a)
@@ -117,6 +119,7 @@ static void *push_aligned(CuArena *a, size_t size, size_t align)
     size_t room;
     size_t cap;
     size_t total;
+    size_t num;
     char *p;
 
     if (a == NULL)
@@ -134,7 +137,7 @@ static void *push_aligned(CuArena *a, size_t size, size_t align)
     cap = size;
     if (!a->debug && cap < a->block_size)
         cap = a->block_size;
-    if (!cu_size_add(header_size(), cap, &total)) {
+    if (!cu_size_add(header_size(), cap, &total) || !cu_size_add(a->blocks, 1, &num)) {
         a->failed = 1;
         return NULL;
     }
@@ -146,6 +149,8 @@ static void *push_aligned(CuArena *a, size_t size, size_t align)
     b->prev = a->head;
     b->cap = cap;
     b->used = size;
+    b->num = num;
+    a->blocks = num;
     a->head = b;
     return block_data(b);
 }
@@ -182,7 +187,7 @@ CuTemp cu_temp_begin(CuArena *a)
     if (a == NULL)
         abort();
     t.arena = a;
-    t.block = a->head;
+    t.block = a->head != NULL ? a->head->num : 0;
     t.used = a->head != NULL ? a->head->used : 0;
     return t;
 }
@@ -194,16 +199,18 @@ void cu_temp_end(CuTemp t)
     if (t.arena == NULL)
         abort();
     /* The scope's block must still be in the chain, and its position must
-     * not be past the current one; otherwise scopes ended out of order. */
-    for (b = t.arena->head; b != t.block; b = b->prev) {
-        if (b == NULL)
+     * not be past the current one; otherwise scopes ended out of order.
+     * Block numbers are never reused, so a freed block cannot match. */
+    b = t.arena->head;
+    while (b != NULL && b->num != t.block)
+        b = b->prev;
+    if (b == NULL && t.block != 0)
+        abort();
+    free_blocks_until(t.arena, b);
+    if (b != NULL) {
+        if (t.used > b->used)
             abort();
-    }
-    free_blocks_until(t.arena, t.block);
-    if (t.block != NULL) {
-        if (t.used > t.block->used)
-            abort();
-        t.block->used = t.used;
+        b->used = t.used;
     }
 }
 

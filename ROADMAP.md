@@ -9,7 +9,7 @@ Done: arena + temp scopes + scratch arenas, debug arena mode, checked size math,
 Next, in order:
 
 1. **`CuSlice` and `CuVec`.** Typed views and growable arrays over `elem_size`, bounds-checked `at`, arena-backed growth. Thin typed wrappers for hot types.
-2. **Byte readers and writers.** `cu_rd_u32le(CuStr, &pos, &out)` and friends: bounds-checked, no pointer casts, so no aliasing or alignment UB in binary formats.
+2. **Byte readers and writers.** `cu_rd_u32le(CuStr, &pos, &out)` and friends: bounds-checked, no pointer casts, so no aliasing or alignment UB in binary formats. Widen each byte to the result type before shifting: `(unsigned long)b[3] << 24`, never `b[3] << 24`, because `unsigned char` promotes to signed `int` and `0xFF << 24` overflows it. Test with every byte `0xFF` under UBSan and CBMC.
 3. **Hash trie map keyed by `CuStr`.** Arena-backed (Wellons' design): no rehash, stable entry pointers, nothing freed individually.
 4. **Pool with generational handles.** `{index, generation}` handles for long-lived objects: a stale handle is reported, never dereferenced.
 5. **`regions` check.** Static check for arena lifetime bugs (design: `dependable-c-agent-toolchain/docs/REGIONS.md`). This repo is its first real target.
@@ -20,7 +20,7 @@ Next, in order:
 The only code allowed to touch the OS. Everything above it stays portable C89.
 
 - Files: read whole file into an arena, buffered reader/writer, directory walking.
-- Threads: start/join, mutex, condition variable, a work queue (see `dependable-c-agent-toolchain/docs/CONCURRENCY.md`).
+- Threads: start/join, mutex, condition variable, a work queue (see `dependable-c-agent-toolchain/docs/CONCURRENCY.md`). Shared flags and pointers use atomics with acquire/release ordering (C11 `<stdatomic.h>` or compiler builtins, wrapped here), never `volatile`: `volatile` stops the compiler eliding accesses but gives neither atomicity nor ordering.
 - Time, environment, process exit codes. Effects are visible to Ward's `authority` check.
 
 ## 3. Tools: ripgrep-style search

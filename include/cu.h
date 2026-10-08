@@ -41,12 +41,15 @@ typedef struct CuArena {
     size_t block_size; /* minimum size of a new block */
     int debug;         /* 1: one malloc per push, so sanitizers see each object */
     int failed;        /* sticky: some push failed */
+    size_t blocks;     /* blocks ever made; numbers the next one, never reset */
 } CuArena;
 
-/* A position in an arena. Ending it frees everything pushed since. */
+/* A position in an arena. Ending it frees everything pushed since. The block
+ * is held by number, not address: a freed block's address can come back from
+ * malloc, and a freed pointer must not even be compared. */
 typedef struct CuTemp {
     CuArena *arena;
-    CuBlock *block;
+    size_t block; /* number of the newest block, 0 if there was none */
     size_t used;
 } CuTemp;
 
