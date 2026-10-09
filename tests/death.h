@@ -13,6 +13,9 @@
 #include <signal.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#if defined(__linux__)
+#include <sys/prctl.h>
+#endif
 
 #define CU_DEATH_TESTS 1
 
@@ -24,6 +27,11 @@ static void expect_abort(void (*body)(void))
     pid = fork();
     assert(pid >= 0);
     if (pid == 0) {
+#if defined(__linux__)
+        /* No core dump: a core_pattern pipe (apport, systemd-coredump)
+         * ignores ulimit -c and can take seconds per expected abort. */
+        prctl(PR_SET_DUMPABLE, 0, 0, 0, 0);
+#endif
         body();
         _exit(0);
     }

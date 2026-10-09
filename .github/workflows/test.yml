@@ -1,0 +1,22 @@
+name: test
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - cc: gcc
+            cflags: -g
+          - cc: clang
+            cflags: -g
+          - cc: clang
+            cflags: -g -fsanitize=address,undefined -fno-sanitize-recover=all
+    steps:
+      - uses: actions/checkout@v4
+      - run: make test CC=${{ matrix.cc }} CFLAGS="${{ matrix.cflags }}"
