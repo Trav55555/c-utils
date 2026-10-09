@@ -13,6 +13,7 @@ Safe, fast primitives for [Dependable C](https://dependablec.org/) (the C89 subs
 | `<ctype.h>` UB on negative `char` and locale surprises | `cu_ascii_*` |
 | Hash tables that rehash, move entries or borrow keys | `CuMap` hash trie: arena-backed, entries never move, keys copied, iteration in insertion order |
 | Dangling pointers to long-lived objects | `CuPool`: generational handles; a stale, null or forged handle gets `NULL`, never memory |
+| Dangling and mistyped links in graphs, cycles and back links | `CuPlex`: nodes link by typed `CuLink`, so a removed or wrong-kind node is `NULL`, never followed |
 | Pointer casts, misaligned loads and sign extension in binary formats | `cu_rd_u32le` and friends read bounds-checked, endian-explicit integers from a `CuStr`; `cu_sb_u32le` and friends write them |
 | Array overruns and element-type mix-ups | `CuVec` (arena-backed growth) and `CuSlice` (views with clamped sub-slicing): bounds-checked `AT`, element size checked at every call |
 | Ignored errors | `CU_MUST_USE` on every fallible call; failures are sticky so one check covers a sequence |

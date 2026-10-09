@@ -379,4 +379,53 @@ int cu_handle_is_null(CuHandle h);
 CuHandle cu_pool_add_(CuPool *p, const void *v, size_t value_size);
 void *cu_pool_get_(const CuPool *p, CuHandle h, size_t value_size);
 
+/* ---- Plex -------------------------------------------------------------- */
+
+/* A link from one node to another. kind 0 is the null link. */
+typedef struct CuLink {
+    unsigned kind;
+    CuHandle h;
+} CuLink;
+
+/* Nodes of several kinds that link to each other in any shape, cycles and
+ * back links included (a plex, in Ross's and Knuth's sense). Each kind is a
+ * CuPool of one node type; nodes hold CuLinks, never pointers, to other
+ * nodes. Following a link that is null, stale (its node was removed) or of
+ * another kind returns NULL: a bad link is reported, never followed, and
+ * removing a node needs no unlinking.
+ *
+ * Kinds are registered with CU_PLEX_KIND and numbered from 1. A kind passed
+ * by the caller that was never registered, or a type whose size differs
+ * from its kind's node size, aborts; a link carrying an unknown kind is
+ * data and only gets NULL. Node pointers stay valid until the node is
+ * removed. A failed registration or addition (out of memory) marks the
+ * plex; later ones also fail, and cu_plex_failed reports it. */
+typedef struct CuPlex {
+    CuArena *arena;
+    CuVec kinds; /* CuPool per kind; kind k is element k - 1 */
+    int failed;
+} CuPlex;
+
+/* Registers a node kind of type T; returns its id, or 0 on failure. */
+#define CU_PLEX_KIND(px, T) cu_plex_kind((px), sizeof(T))
+/* Adds a copy of *v as a node of kind; returns a link to it, or the null
+ * link on failure. */
+#define CU_PLEX_ADD(px, kind, v) cu_plex_add_((px), (kind), (v), sizeof *(v))
+/* Pointer to the node of kind that link names, or NULL. */
+#define CU_PLEX_GET(px, T, kind, link) ((T *)cu_plex_get_((px), (kind), (link), sizeof(T)))
+
+void cu_plex_init(CuPlex *px, CuArena *a);
+unsigned cu_plex_kind(CuPlex *px, size_t node_size);
+/* Removes link's node. Returns 0, changing nothing, if link is null, stale
+ * or names an unknown kind. */
+int cu_plex_remove(CuPlex *px, CuLink link);
+int cu_plex_failed(const CuPlex *px);
+CuLink cu_link_null(void);
+int cu_link_is_null(CuLink link);
+/* Whether a and b name the same node; a stale link still equals itself. */
+int cu_link_eq(CuLink a, CuLink b);
+
+CuLink cu_plex_add_(CuPlex *px, unsigned kind, const void *v, size_t node_size);
+void *cu_plex_get_(const CuPlex *px, unsigned kind, CuLink link, size_t node_size);
+
 #endif
