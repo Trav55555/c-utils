@@ -12,29 +12,33 @@ static void test_scope_ids_nest(void)
     CuArena a;
     CuTemp outer;
     CuTemp inner;
+    size_t base;
 
     cu_arena_init_with(&a, 64, 0);
-    assert(cu_arena_scope(&a) == 0);
+    base = cu_arena_scope(&a);
+    assert(base != 0);
     outer = cu_temp_begin(&a);
-    assert(cu_arena_scope(&a) == outer.id && outer.id != 0);
+    assert(cu_arena_scope(&a) == outer.id && outer.id != base);
     inner = cu_temp_begin(&a);
     assert(cu_arena_scope(&a) == inner.id && inner.id != outer.id);
     cu_temp_end(inner);
     assert(cu_arena_scope(&a) == outer.id);
     cu_temp_end(outer);
-    assert(cu_arena_scope(&a) == 0);
+    assert(cu_arena_scope(&a) == base);
     /* A reopened scope gets a new id, so the old one cannot pass for it. */
     inner = cu_temp_begin(&a);
     assert(inner.id != outer.id);
     cu_temp_end(inner);
-    /* Releasing discards open scopes. */
+    /* Releasing discards open scopes and starts a new base. */
     outer = cu_temp_begin(&a);
     cu_arena_release(&a);
-    assert(cu_arena_scope(&a) == 0);
+    assert(cu_arena_scope(&a) != base && cu_arena_scope(&a) != outer.id);
+    assert(cu_arena_scope(&a) != 0);
     cu_arena_release(&a);
 }
 
-/* 0 means no scope, so a wrapping counter skips it. */
+/* 0 is never an id, so a zeroed CuTemp or container never matches; a
+ * wrapping counter skips it. */
 static void test_scope_id_skips_zero(void)
 {
     CuArena a;
@@ -43,8 +47,29 @@ static void test_scope_id_skips_zero(void)
     cu_arena_init_with(&a, 64, 0);
     a.scopes = (size_t)-1;
     t = cu_temp_begin(&a);
-    assert(t.id == 1 && cu_arena_scope(&a) == 1);
+    assert(t.id != 0 && cu_arena_scope(&a) == t.id);
     cu_temp_end(t);
+    a.scopes = (size_t)-1;
+    cu_arena_release(&a);
+    assert(cu_arena_scope(&a) != 0);
+    cu_arena_release(&a);
+}
+
+/* A container made after a release works: release only retires what was
+ * made before it. */
+static void test_container_after_release(void)
+{
+    CuArena a;
+    CuVec v;
+    long x;
+
+    cu_arena_init_with(&a, 64, 0);
+    assert(cu_arena_push_bytes(&a, 8) != NULL);
+    cu_arena_release(&a);
+    CU_VEC_INIT(&v, &a, long);
+    x = 3;
+    CU_VEC_PUSH(&v, &x);
+    assert(!cu_vec_failed(&v) && *CU_VEC_AT(&v, long, 0) == 3);
     cu_arena_release(&a);
 }
 
@@ -139,6 +164,35 @@ static void end_stale_scratch_scope(void)
     now = cu_scratch_begin1(NULL);
     assert(now.arena == old.arena);
     cu_scratch_end(old);
+}
+
+/* Made with no scope open, so before release gave the arena a new base
+ * the vector's scope matched the arena's again and this push wrote into a
+ * freed block. */
+static void vec_push_after_release(void)
+{
+    CuArena a;
+    CuVec v;
+    long x;
+
+    cu_arena_init_with(&a, 64, 0);
+    CU_VEC_INIT(&v, &a, long);
+    x = 1;
+    CU_VEC_PUSH(&v, &x);
+    cu_arena_release(&a);
+    CU_VEC_PUSH(&v, &x);
+}
+
+static void builder_append_after_release(void)
+{
+    CuArena a;
+    CuBuilder b;
+
+    cu_arena_init_with(&a, 64, 0);
+    cu_sb_init(&b, &a);
+    cu_sb_char(&b, 'x');
+    cu_arena_release(&a);
+    cu_sb_char(&b, 'y');
 }
 
 /* A scope that ended cannot pass for a new scope at the same depth. */
@@ -286,6 +340,8 @@ static void death_tests(void)
     expect_abort(end_stale_scope_at_same_depth);
     expect_abort(end_scope_after_release_of_empty_arena);
     expect_abort(end_stale_scratch_scope);
+    expect_abort(vec_push_after_release);
+    expect_abort(builder_append_after_release);
     expect_abort(vec_push_in_inner_scope);
     expect_abort(vec_reserve_in_inner_scope);
     expect_abort(vec_push_in_later_scope);
@@ -301,6 +357,7 @@ int main(void)
 {
     test_scope_ids_nest();
     test_scope_id_skips_zero();
+    test_container_after_release();
     test_containers_inside_their_scope();
 #ifdef CU_DEATH_TESTS
     death_tests();

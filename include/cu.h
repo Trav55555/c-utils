@@ -24,8 +24,10 @@
  * ended, that memory is already gone. Reading is allowed under newer scopes,
  * but only while the container's own scope is still open.
  *
- * The check cannot see past cu_arena_release or re-initialising the arena:
- * a container (or CuTemp) used after either is not caught. */
+ * Each release gives the arena a new base scope, so a container made
+ * before it aborts when grown afterwards. Re-initialising an arena restarts
+ * its ids instead, and a container or CuTemp from before that is not
+ * caught: do not re-initialise an arena that still has users. */
 #ifndef CU_H
 #define CU_H
 
@@ -57,8 +59,8 @@ typedef struct CuArena {
     size_t held;       /* bytes in live blocks, headers included */
     size_t limit;      /* most bytes held may reach; (size_t)-1: no limit */
     size_t refused;    /* bytes of the last block the limit refused, or 0 */
-    size_t scope;      /* id of the innermost open temp scope, 0 if none */
-    size_t scopes;     /* temp scopes ever begun; numbers the next one */
+    size_t scope;      /* innermost open temp scope's id, else the base's */
+    size_t scopes;     /* scope ids ever issued; numbers the next one */
 } CuArena;
 
 /* A position in an arena. Ending it frees everything pushed since. The block
@@ -78,7 +80,9 @@ typedef struct CuTemp {
 void cu_arena_init(CuArena *a);
 void cu_arena_init_with(CuArena *a, size_t block_size, int debug);
 
-/* Frees every block. The arena can be pushed to again afterwards. */
+/* Frees every block. The arena can be pushed to again afterwards, but
+ * temp scopes and containers from before the release are dead: ending or
+ * growing one aborts. */
 void cu_arena_release(CuArena *a);
 
 /* Uninitialised memory for count elements of elem_size bytes, aligned for any
@@ -108,7 +112,8 @@ void cu_arena_set_limit(CuArena *a, size_t max_bytes);
  * inside a scope are invalid after it ends. */
 CuTemp cu_temp_begin(CuArena *a);
 void cu_temp_end(CuTemp t);
-/* The id of the innermost temp scope open on a, or 0 if none is. */
+/* The id of the innermost temp scope open on a or, with none open, of the
+ * arena's base scope, which each release replaces. Never 0. */
 size_t cu_arena_scope(const CuArena *a);
 
 /* Per-thread scratch arenas. Returns a scope on a scratch arena that is not

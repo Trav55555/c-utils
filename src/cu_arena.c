@@ -78,6 +78,17 @@ static char *block_data(CuBlock *b)
     return (char *)b + header_size();
 }
 
+/* A fresh scope id. Unsigned, so it wraps rather than overflows; ids repeat
+ * only after (size_t)-1 of them on one arena. 0 is never an id, so a zeroed
+ * CuTemp or container never matches. */
+static size_t next_scope_id(CuArena *a)
+{
+    a->scopes++;
+    if (a->scopes == 0)
+        a->scopes = 1;
+    return a->scopes;
+}
+
 void cu_arena_init_with(CuArena *a, size_t block_size, int debug)
 {
     if (a == NULL)
@@ -90,8 +101,8 @@ void cu_arena_init_with(CuArena *a, size_t block_size, int debug)
     a->held = 0;
     a->limit = (size_t)-1;
     a->refused = 0;
-    a->scope = 0;
     a->scopes = 0;
+    a->scope = next_scope_id(a);
 }
 
 void cu_arena_init(CuArena *a)
@@ -121,9 +132,9 @@ void cu_arena_release(CuArena *a)
     free_blocks_until(a, NULL);
     a->failed = 0;
     a->refused = 0;
-    /* Open scopes are discarded. scopes keeps counting, so none of them can
-     * match a scope begun later. */
-    a->scope = 0;
+    /* A new base scope: open temp scopes, and containers made before now,
+     * no longer match, so ending or growing one aborts. */
+    a->scope = next_scope_id(a);
 }
 
 static void *push_aligned(CuArena *a, size_t size, size_t align)
@@ -216,12 +227,7 @@ CuTemp cu_temp_begin(CuArena *a)
     t.arena = a;
     t.block = a->head != NULL ? a->head->num : 0;
     t.used = a->head != NULL ? a->head->used : 0;
-    /* Unsigned, so it wraps rather than overflows; ids repeat only after
-     * (size_t)-1 scopes on one arena. 0 means no scope, so it is skipped. */
-    a->scopes++;
-    if (a->scopes == 0)
-        a->scopes = 1;
-    t.id = a->scopes;
+    t.id = next_scope_id(a);
     t.parent = a->scope;
     a->scope = t.id;
     return t;
