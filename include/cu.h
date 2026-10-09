@@ -42,6 +42,9 @@ typedef struct CuArena {
     int debug;         /* 1: one malloc per push, so sanitizers see each object */
     int failed;        /* sticky: some push failed */
     size_t blocks;     /* blocks ever made; numbers the next one, never reset */
+    size_t held;       /* bytes in live blocks, headers included */
+    size_t limit;      /* most bytes held may reach; (size_t)-1: no limit */
+    size_t refused;    /* bytes of the last block the limit refused, or 0 */
 } CuArena;
 
 /* A position in an arena. Ending it frees everything pushed since. The block
@@ -72,6 +75,15 @@ CU_MUST_USE char *cu_arena_push_bytes(CuArena *a, size_t n);
 #define CU_PUSH(a, T, n) ((T *)cu_arena_push((a), (n), sizeof(T)))
 
 int cu_arena_failed(const CuArena *a);
+
+/* Caps the bytes the arena's blocks may hold, headers included. A push that
+ * would pass the cap fails exactly as if memory ran out, and records the
+ * block's size in refused: held + refused is the smallest cap under which
+ * that push succeeds. Releasing the arena or ending a temp scope frees bytes
+ * for later pushes. The default, (size_t)-1, means no cap. Use it to bound
+ * memory spent on untrusted input, and in tests to make each allocation
+ * fail in turn. */
+void cu_arena_set_limit(CuArena *a, size_t max_bytes);
 
 /* Temp scopes must end in reverse order of beginning; ending one out of order
  * aborts. Pointers pushed inside a scope are invalid after it ends. */
@@ -282,7 +294,8 @@ unsigned long cu_hash_fnv1a(CuStr s);
  * Cost per call is the trie's depth, logarithmic for ordinary keys. Keys
  * whose 32-bit hashes are equal share one path that ends in a list, so n
  * such keys cost O(n) each; FNV-1a collisions are easy to construct, so
- * bound the number of keys taken from untrusted input.
+ * bound the number of keys taken from untrusted input (cu_arena_set_limit
+ * on the map's arena caps them by memory).
  *
  * As with CuVec, use the CU_MAP_* macros: a size that does not match the
  * map's value size aborts. A failed insertion marks the map; after that no

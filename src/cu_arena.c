@@ -83,6 +83,9 @@ void cu_arena_init_with(CuArena *a, size_t block_size, int debug)
     a->debug = debug;
     a->failed = 0;
     a->blocks = 0;
+    a->held = 0;
+    a->limit = (size_t)-1;
+    a->refused = 0;
 }
 
 void cu_arena_init(CuArena *a)
@@ -98,6 +101,7 @@ static void free_blocks_until(CuArena *a, CuBlock *stop)
     b = a->head;
     while (b != stop) {
         prev = b->prev;
+        a->held -= header_size() + b->cap;
         free(b);
         b = prev;
     }
@@ -141,11 +145,17 @@ static void *push_aligned(CuArena *a, size_t size, size_t align)
         a->failed = 1;
         return NULL;
     }
+    if (a->held > a->limit || total > a->limit - a->held) {
+        a->refused = total;
+        a->failed = 1;
+        return NULL;
+    }
     b = (CuBlock *)malloc(total);
     if (b == NULL) {
         a->failed = 1;
         return NULL;
     }
+    a->held += total;
     b->prev = a->head;
     b->cap = cap;
     b->used = size;
@@ -171,6 +181,13 @@ void *cu_arena_push(CuArena *a, size_t count, size_t elem_size)
 char *cu_arena_push_bytes(CuArena *a, size_t n)
 {
     return (char *)push_aligned(a, n, 1);
+}
+
+void cu_arena_set_limit(CuArena *a, size_t max_bytes)
+{
+    if (a == NULL)
+        abort();
+    a->limit = max_bytes;
 }
 
 int cu_arena_failed(const CuArena *a)

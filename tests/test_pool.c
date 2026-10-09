@@ -150,6 +150,44 @@ static void test_failed_add_is_sticky(CuArena *a)
     assert(cu_pool_get_(&p, cu_handle_null(), huge) == NULL);
 }
 
+/* Each run raises the arena's limit to held + refused, just enough for the
+ * allocation that failed last time, so every allocation fails in turn. */
+static void test_add_fails_at_every_allocation(int debug)
+{
+    CuArena a;
+    CuPool p;
+    CuHandle h1;
+    CuHandle h2;
+    size_t limit;
+    size_t next;
+    long v;
+    int done;
+
+    done = 0;
+    for (limit = 0; !done; limit = next) {
+        cu_arena_init_with(&a, 64, debug);
+        cu_arena_set_limit(&a, limit);
+        CU_POOL_INIT(&p, &a, long);
+        v = 1;
+        /* The first add makes the page's slots, its values and the page
+         * table: three allocations. */
+        h1 = CU_POOL_ADD(&p, &v);
+        v = 2;
+        h2 = CU_POOL_ADD(&p, &v);
+        if (cu_handle_is_null(h1)) {
+            assert(cu_pool_failed(&p) && cu_pool_len(&p) == 0);
+            assert(cu_handle_is_null(h2));
+        } else {
+            done = 1;
+            assert(*CU_POOL_GET(&p, long, h1) == 1 && *CU_POOL_GET(&p, long, h2) == 2);
+        }
+        /* Every run gets one allocation further. */
+        next = a.held + a.refused;
+        assert(done || next > limit);
+        cu_arena_release(&a);
+    }
+}
+
 #ifdef CU_DEATH_TESTS
 static void pool_get_wrong_type(void)
 {
@@ -235,6 +273,8 @@ int main(void)
     test_many_objects_stay_put(&a);
     test_retires_at_max_generation(&a);
     test_failed_add_is_sticky(&a);
+    test_add_fails_at_every_allocation(0);
+    test_add_fails_at_every_allocation(1);
     cu_arena_release(&a);
 #ifdef CU_DEATH_TESTS
     death_tests();

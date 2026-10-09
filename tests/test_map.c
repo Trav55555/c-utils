@@ -150,6 +150,56 @@ static void test_iterates_in_insertion_order(CuArena *a)
     assert(CU_MAP_NEXT(&it, long, &key) == NULL);
 }
 
+/* Each run raises the arena's limit to held + refused, just enough for the
+ * allocation that failed last time, so every allocation fails in turn. */
+static void test_upsert_fails_at_every_allocation(int debug)
+{
+    static const char *const keys[] = {"one", "two", "", "four", "liquid", "costarring"};
+    CuArena a;
+    CuMap m;
+    CuMapIter it;
+    CuStr key;
+    size_t limit;
+    size_t next;
+    long i;
+    long k;
+    long inserted;
+    long *v;
+    int done;
+
+    done = 0;
+    for (limit = 0; !done; limit = next) {
+        cu_arena_init_with(&a, 64, debug);
+        cu_arena_set_limit(&a, limit);
+        CU_MAP_INIT(&m, &a, long);
+        inserted = 0;
+        for (i = 0; i < 6; i++) {
+            v = CU_MAP_UPSERT(&m, long, cu_str_cstr(keys[i]), &i);
+            if (v == NULL)
+                break;
+            inserted++;
+        }
+        done = inserted == 6;
+        if (!done) {
+            /* The failed key is absent, the map is marked, later new keys
+             * are refused, and every earlier key is intact and in order. */
+            assert(cu_map_failed(&m) && cu_map_len(&m) == (size_t)inserted);
+            assert(CU_MAP_GET(&m, long, cu_str_cstr(keys[inserted])) == NULL);
+            assert(CU_MAP_UPSERT(&m, long, CU_LIT("later"), &i) == NULL);
+        }
+        it = cu_map_iter(&m);
+        for (k = 0; k < inserted; k++) {
+            assert(*CU_MAP_GET(&m, long, cu_str_cstr(keys[k])) == k);
+            assert(*CU_MAP_NEXT(&it, long, &key) == k);
+        }
+        assert(CU_MAP_NEXT(&it, long, &key) == NULL);
+        /* Every run gets one allocation further. */
+        next = a.held + a.refused;
+        assert(done || next > limit);
+        cu_arena_release(&a);
+    }
+}
+
 #ifdef CU_DEATH_TESTS
 /* Runs one map call on a map of longs holding "k". */
 static void with_long_map(void (*call)(CuMap *))
@@ -280,6 +330,8 @@ int main(void)
     test_colliding_keys_stay_distinct(&a);
     test_many_keys_and_stable_pointers(&a);
     test_iterates_in_insertion_order(&a);
+    test_upsert_fails_at_every_allocation(0);
+    test_upsert_fails_at_every_allocation(1);
     cu_arena_release(&a);
 #ifdef CU_DEATH_TESTS
     death_tests();

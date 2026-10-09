@@ -142,6 +142,37 @@ static void test_parse_long(CuArena *a)
     assert(!cu_parse_long(cu_str_cstr(bumped), 10, &v));
 }
 
+/* Each run raises the arena's limit to held + refused, just enough for the
+ * allocation that failed last time, so every allocation fails in turn. */
+static void test_append_fails_at_every_allocation(int debug)
+{
+    CuArena a;
+    CuBuilder b;
+    CuStr out;
+    size_t limit;
+    size_t next;
+    int i;
+    int done;
+
+    done = 0;
+    for (limit = 0; !done; limit = next) {
+        cu_arena_init_with(&a, 64, debug);
+        cu_arena_set_limit(&a, limit);
+        cu_sb_init(&b, &a);
+        for (i = 0; i < 40; i++)
+            cu_sb_str(&b, CU_LIT("0123456789"));
+        done = cu_sb_finish(&b, &out);
+        if (done)
+            assert(out.len == 400 && cu_str_starts_with(out, CU_LIT("01234567890123")));
+        else
+            assert(out.len == 0 && cu_arena_failed(&a));
+        /* Every run gets one allocation further. */
+        next = a.held + a.refused;
+        assert(done || next > limit);
+        cu_arena_release(&a);
+    }
+}
+
 int main(void)
 {
     CuArena a;
@@ -153,6 +184,7 @@ int main(void)
         test_builder_empty(&a);
         test_builder_grows(&a);
         test_builder_failure_is_sticky(&a);
+        test_append_fails_at_every_allocation(debug);
         test_parse_ulong(&a);
         test_parse_long(&a);
         assert(cu_arena_failed(&a) == 0);

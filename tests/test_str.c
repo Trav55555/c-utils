@@ -112,6 +112,25 @@ static void test_copy(int debug)
     cu_arena_release(&a);
 }
 
+/* With no room at all, copies report failure instead of returning bad
+ * views or pointers. */
+static void test_copy_failure(int debug)
+{
+    CuArena a;
+    CuStr copy;
+
+    cu_arena_init_with(&a, 64, debug);
+    cu_arena_set_limit(&a, 0);
+    copy = cu_str_copy(&a, CU_LIT("abcd"));
+    assert(copy.len == 0 && copy.ptr != NULL);
+    assert(cu_str_cstr_copy(&a, CU_LIT("ab")) == NULL);
+    assert(cu_arena_failed(&a));
+    /* An empty copy needs no memory, so it still succeeds. */
+    copy = cu_str_copy(&a, cu_str_empty());
+    assert(copy.len == 0);
+    cu_arena_release(&a);
+}
+
 int main(void)
 {
     test_construct();
@@ -122,5 +141,7 @@ int main(void)
     test_trim_and_ascii();
     test_copy(0);
     test_copy(1);
+    test_copy_failure(0);
+    test_copy_failure(1);
     return 0;
 }

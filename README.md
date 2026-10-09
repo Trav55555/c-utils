@@ -45,6 +45,10 @@ CuStr pair(CuArena *out, CuStr name, unsigned long value)
 
 With `CU_ARENA_DEBUG` defined, or when built with AddressSanitizer, every push is its own `malloc`. Sanitizers (and Fil-C) then see each object's bounds, and memory from an ended temp scope is really freed, so a stale pointer is reported instead of silently reading reused memory. `cu_arena_init_with(&a, block_size, 1)` turns it on for one arena.
 
+## Arena limits
+
+`cu_arena_set_limit(&a, max_bytes)` caps the bytes an arena's blocks may hold. A push past the cap fails exactly like running out of memory, so every container's out-of-memory path runs in ordinary tests, and memory spent on untrusted input has a ceiling. After a refusal, `a.held + a.refused` is the smallest cap under which that push succeeds; the tests use it to make each allocation in a scenario fail in turn.
+
 ## Checks
 
 ```sh

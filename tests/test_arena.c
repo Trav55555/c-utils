@@ -166,6 +166,98 @@ static void test_scratch_avoids_conflicts(void)
     cu_scratch_release();
 }
 
+/* A push that exactly fills the rest of a block stays in it. */
+static void test_exact_fit_stays_in_block(void)
+{
+    CuArena a;
+    size_t one;
+
+    cu_arena_init_with(&a, 64, 0);
+    assert(cu_arena_push_bytes(&a, 32) != NULL);
+    one = a.held;
+    assert(cu_arena_push_bytes(&a, 32) != NULL);
+    assert(a.held == one);
+    /* Nothing more fits, but a zero-size push still needs no new block. */
+    assert(cu_arena_push_bytes(&a, 0) != NULL);
+    assert(a.held == one);
+    assert(cu_arena_push_bytes(&a, 1) != NULL);
+    assert(a.held > one);
+    cu_arena_release(&a);
+}
+
+/* A size that overflows once the block header is added fails cleanly. */
+static void test_header_overflow_fails(int debug)
+{
+    CuArena a;
+
+    cu_arena_init_with(&a, 64, debug);
+    assert(cu_arena_push_bytes(&a, (size_t)-1) == NULL);
+    assert(cu_arena_failed(&a) && a.held == 0);
+    cu_arena_release(&a);
+}
+
+/* The limit counts whole blocks: a push fails when its block would pass
+ * it, ending a scope or releasing gives the bytes back, and the arena is
+ * marked failed exactly as for running out of memory. */
+static void test_limit(int debug)
+{
+    CuArena a;
+    CuTemp t;
+    size_t one;
+
+    /* Measure one block's cost with no limit. */
+    cu_arena_init_with(&a, 64, debug);
+    assert(cu_arena_push_bytes(&a, 64) != NULL);
+    one = a.held;
+    assert(one > 64);
+    cu_arena_release(&a);
+    assert(a.held == 0);
+
+    cu_arena_set_limit(&a, one - 1);
+    assert(cu_arena_push_bytes(&a, 64) == NULL);
+    assert(cu_arena_failed(&a) && a.held == 0);
+    /* refused names the exact cap that lets the push through. */
+    assert(a.refused == one && a.held + a.refused == one);
+    cu_arena_release(&a);
+
+    cu_arena_set_limit(&a, one);
+    assert(cu_arena_push_bytes(&a, 64) != NULL);
+    assert(a.held == one);
+    t = cu_temp_begin(&a);
+    assert(cu_arena_push_bytes(&a, 64) == NULL);
+    assert(cu_arena_failed(&a));
+    cu_temp_end(t);
+    cu_arena_release(&a);
+    assert(!cu_arena_failed(&a));
+
+    /* A scope that ends returns its blocks' bytes. */
+    cu_arena_set_limit(&a, 2 * one);
+    assert(cu_arena_push_bytes(&a, 64) != NULL);
+    t = cu_temp_begin(&a);
+    assert(cu_arena_push_bytes(&a, 64) != NULL);
+    assert(a.held == 2 * one);
+    cu_temp_end(t);
+    assert(a.held == one);
+    assert(cu_arena_push_bytes(&a, 64) != NULL);
+    assert(!cu_arena_failed(&a));
+    cu_arena_release(&a);
+
+    /* A limit set below what is already held refuses new blocks. */
+    assert(cu_arena_push_bytes(&a, 64) != NULL);
+    cu_arena_set_limit(&a, 1);
+    assert(cu_arena_push_bytes(&a, 64) == NULL);
+    cu_arena_release(&a);
+
+    /* No limit by default, and (size_t)-1 lifts one. */
+    cu_arena_init_with(&a, 64, debug);
+    assert(a.limit == (size_t)-1 && a.refused == 0);
+    cu_arena_set_limit(&a, 0);
+    assert(cu_arena_push_bytes(&a, 1) == NULL);
+    cu_arena_set_limit(&a, (size_t)-1);
+    assert(cu_arena_push_bytes(&a, 1) != NULL);
+    cu_arena_release(&a);
+}
+
 #ifdef CU_DEATH_TESTS
 /* Ending the outer scope frees the inner scope's block, and the next push
  * usually gets a block at the same address. The stale inner scope must still
@@ -218,8 +310,11 @@ int main(void)
         test_temp_scopes_nest(debug);
         test_release_then_reuse(debug);
         test_debug_mode_separates_pushes(debug);
+        test_limit(debug);
+        test_header_overflow_fails(debug);
     }
     test_temp_end_reuses_memory();
+    test_exact_fit_stays_in_block();
     test_default_init();
     test_scratch_avoids_conflicts();
 #ifdef CU_DEATH_TESTS

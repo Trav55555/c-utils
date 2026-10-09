@@ -144,6 +144,41 @@ static void test_empty_data_is_not_null(void)
     cu_arena_release(&a);
 }
 
+/* Each run raises the arena's limit to held + refused, just enough for the
+ * allocation that failed last time, so every allocation fails in turn. */
+static void test_push_fails_at_every_allocation(int debug)
+{
+    CuArena a;
+    CuVec v;
+    size_t limit;
+    size_t next;
+    long i;
+    long pushed;
+    int done;
+
+    done = 0;
+    for (limit = 0; !done; limit = next) {
+        cu_arena_init_with(&a, 64, debug);
+        cu_arena_set_limit(&a, limit);
+        CU_VEC_INIT(&v, &a, long);
+        pushed = 0;
+        for (i = 0; i < 12; i++) {
+            CU_VEC_PUSH(&v, &i);
+            if (!cu_vec_failed(&v))
+                pushed++;
+        }
+        /* Failure is sticky: nothing lands after the first failed push. */
+        assert(cu_vec_len(&v) == (size_t)pushed);
+        for (i = 0; i < pushed; i++)
+            assert(*CU_VEC_AT(&v, long, i) == i);
+        done = pushed == 12;
+        /* Every run gets one allocation further. */
+        next = a.held + a.refused;
+        assert(done || next > limit);
+        cu_arena_release(&a);
+    }
+}
+
 int main(void)
 {
     int debug;
@@ -151,6 +186,7 @@ int main(void)
     for (debug = 0; debug <= 1; debug++) {
         test_push_and_at(debug);
         test_reserve_keeps_data_in_place(debug);
+        test_push_fails_at_every_allocation(debug);
     }
     test_push_copies();
     test_pop();

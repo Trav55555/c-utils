@@ -179,6 +179,61 @@ static void test_failed_add_is_sticky(CuArena *a)
     assert(cu_plex_kind(&px, sizeof(long)) == 0);
 }
 
+/* Each run raises the arena's limit to held + refused, just enough for the
+ * allocation that failed last time, so every allocation fails in turn. */
+static void test_fails_at_every_allocation(int debug)
+{
+    CuArena a;
+    CuPlex px;
+    unsigned person;
+    unsigned pet;
+    CuLink x;
+    CuLink rex;
+    Person p;
+    Pet d;
+    size_t limit;
+    size_t next;
+    int done;
+
+    done = 0;
+    for (limit = 0; !done; limit = next) {
+        cu_arena_init_with(&a, 64, debug);
+        cu_arena_set_limit(&a, limit);
+        cu_plex_init(&px, &a);
+        /* A kind id is 0 exactly when registration failed. */
+        person = CU_PLEX_KIND(&px, Person);
+        assert((person == 0) == cu_plex_failed(&px));
+        pet = CU_PLEX_KIND(&px, Pet);
+        assert((pet == 0) == cu_plex_failed(&px));
+        x = cu_link_null();
+        rex = cu_link_null();
+        if (pet != 0) {
+            p.id = 1;
+            p.next = cu_link_null();
+            p.pet = cu_link_null();
+            x = CU_PLEX_ADD(&px, person, &p);
+            d.name = 'r';
+            d.owner = x;
+            rex = CU_PLEX_ADD(&px, pet, &d);
+        }
+        done = !cu_link_is_null(rex);
+        if (done) {
+            assert(CU_PLEX_GET(&px, Pet, pet, rex)->name == 'r');
+            assert(CU_PLEX_GET(&px, Person, person, x)->id == 1);
+        } else {
+            /* Whatever failed marked the plex, and later steps failed too. */
+            assert(cu_plex_failed(&px));
+            assert(person == 0 || pet == 0 || cu_link_is_null(rex));
+            if (person == 0)
+                assert(pet == 0);
+        }
+        /* Every run gets one allocation further. */
+        next = a.held + a.refused;
+        assert(done || next > limit);
+        cu_arena_release(&a);
+    }
+}
+
 #ifdef CU_DEATH_TESTS
 static void get_unknown_kind(void)
 {
@@ -278,6 +333,8 @@ int main(void)
     test_link_equality();
     test_byte_kind(&a);
     test_failed_add_is_sticky(&a);
+    test_fails_at_every_allocation(0);
+    test_fails_at_every_allocation(1);
     cu_arena_release(&a);
 #ifdef CU_DEATH_TESTS
     death_tests();
