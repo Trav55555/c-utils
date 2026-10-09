@@ -1,3 +1,4 @@
+#include "death.h"
 #include <assert.h>
 #include <string.h>
 #include "cu.h"
@@ -184,6 +185,62 @@ static void test_round_trip(CuArena *a)
     assert(pos == out.len);
 }
 
+#ifdef CU_DEATH_TESTS
+static void write_value(void (*write)(CuBuilder *, unsigned long), unsigned long v)
+{
+    CuArena a;
+    CuBuilder b;
+
+    cu_arena_init(&a);
+    cu_sb_init(&b, &a);
+    write(&b, v);
+    cu_arena_release(&a);
+}
+
+static void u8_too_large(void)
+{
+    write_value(cu_sb_u8, 0x100UL);
+}
+
+static void u16le_too_large(void)
+{
+    write_value(cu_sb_u16le, 0x10000UL);
+}
+
+static void u16be_too_large(void)
+{
+    write_value(cu_sb_u16be, 0x10000UL);
+}
+
+/* 2^32, which only exists where long is wider than 32 bits; zero otherwise. */
+static unsigned long two_to_32(void)
+{
+    return (1UL << 16) << 16;
+}
+
+static void u32le_too_large(void)
+{
+    write_value(cu_sb_u32le, two_to_32());
+}
+
+static void u32be_too_large(void)
+{
+    write_value(cu_sb_u32be, two_to_32());
+}
+
+/* Contract violations abort. */
+static void death_tests(void)
+{
+    expect_abort(u8_too_large);
+    expect_abort(u16le_too_large);
+    expect_abort(u16be_too_large);
+    if (two_to_32() != 0) {
+        expect_abort(u32le_too_large);
+        expect_abort(u32be_too_large);
+    }
+}
+#endif
+
 int main(void)
 {
     CuArena a;
@@ -196,5 +253,8 @@ int main(void)
     test_writes_exact_bytes(&a);
     test_round_trip(&a);
     cu_arena_release(&a);
+#ifdef CU_DEATH_TESTS
+    death_tests();
+#endif
     return 0;
 }

@@ -325,4 +325,58 @@ void *cu_map_upsert_(CuMap *m, CuStr key, const void *init, size_t init_size, si
 void *cu_map_get_(const CuMap *m, CuStr key, size_t value_size);
 void *cu_map_next_(CuMapIter *it, CuStr *key, size_t value_size);
 
+/* ---- Pool with generational handles ------------------------------------ */
+
+/* A handle names one object in a pool. Generation 0 is the null handle,
+ * which never names an object. */
+typedef struct CuHandle {
+    size_t index;
+    unsigned long gen;
+} CuHandle;
+
+/* Objects of one type that can be removed individually, named by handles
+ * rather than pointers. Once an object is removed every handle to it is
+ * stale: CU_POOL_GET returns NULL and cu_pool_remove returns 0. A stale,
+ * null or forged handle is reported this way and never dereferenced. A
+ * freed slot is reused under the next generation, so old handles stay
+ * stale; a slot that has reached max_gen is retired instead, so a
+ * generation never wraps around to a value an old handle still holds.
+ *
+ * Slots live in fixed-size pages in the arena: an object's pointer stays
+ * valid until the object is removed, and the pool lives until the arena is
+ * released. As with CuVec, a size that does not match the pool's value size
+ * aborts. A failed addition (out of memory) marks the pool and returns the
+ * null handle; later additions also fail, and cu_pool_failed reports it. */
+typedef struct CuPool {
+    CuArena *arena;
+    CuVec pages;
+    size_t slots;     /* slots ever made */
+    size_t free_head; /* first reusable slot, or (size_t)-1 */
+    size_t len;       /* live objects */
+    size_t value_size;
+    unsigned long max_gen;
+    int failed;
+} CuPool;
+
+#define CU_POOL_INIT(p, a, T) cu_pool_init((p), (a), sizeof(T))
+/* Adds a copy of *v; returns its handle, or the null handle on failure. */
+#define CU_POOL_ADD(p, v) cu_pool_add_((p), (v), sizeof *(v))
+/* Pointer to h's object, or NULL if h is stale, null or forged. */
+#define CU_POOL_GET(p, T, h) ((T *)cu_pool_get_((p), (h), sizeof(T)))
+
+/* Generations up to the largest unsigned long. value_size 0 aborts. */
+void cu_pool_init(CuPool *p, CuArena *a, size_t value_size);
+/* Generations up to max_gen, which must be at least 1. */
+void cu_pool_init_with(CuPool *p, CuArena *a, size_t value_size, unsigned long max_gen);
+/* Removes h's object. Returns 0, changing nothing, if h is stale, null or
+ * forged. */
+int cu_pool_remove(CuPool *p, CuHandle h);
+size_t cu_pool_len(const CuPool *p);
+int cu_pool_failed(const CuPool *p);
+CuHandle cu_handle_null(void);
+int cu_handle_is_null(CuHandle h);
+
+CuHandle cu_pool_add_(CuPool *p, const void *v, size_t value_size);
+void *cu_pool_get_(const CuPool *p, CuHandle h, size_t value_size);
+
 #endif

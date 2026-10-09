@@ -1,3 +1,4 @@
+#include "death.h"
 #include <assert.h>
 #include <stddef.h>
 #include "cu.h"
@@ -90,6 +91,72 @@ static void test_slices_a_vec(void)
     cu_arena_release(&a);
 }
 
+#ifdef CU_DEATH_TESTS
+static void slice_at_len(void)
+{
+    long arr[3] = {1, 2, 3};
+    CuSlice s;
+
+    s = CU_SLICE(arr, 3);
+    (void)CU_SLICE_AT(s, long, 3);
+}
+
+static void slice_at_wrong_type(void)
+{
+    long arr[3] = {1, 2, 3};
+    CuSlice s;
+
+    s = CU_SLICE(arr, 3);
+    (void)CU_SLICE_AT(s, char, 0);
+}
+
+static void slice_data_wrong_type(void)
+{
+    long arr[3] = {1, 2, 3};
+    CuSlice s;
+
+    s = CU_SLICE(arr, 3);
+    (void)CU_SLICE_DATA(s, char);
+}
+
+static void slice_null_with_length(void)
+{
+    long *none;
+
+    none = NULL;
+    (void)CU_SLICE(none, 1);
+}
+
+/* No real array is this big, so the size must not wrap to a small one. */
+static void slice_size_overflows(void)
+{
+    long arr[1];
+
+    arr[0] = 0;
+    (void)CU_SLICE(arr, (size_t)-1 / sizeof(long) + 1);
+}
+
+/* Bypasses the macro, which always passes a nonzero sizeof. */
+static void slice_zero_size(void)
+{
+    long arr[1];
+
+    arr[0] = 0;
+    (void)cu_slice_n_(arr, 1, 0);
+}
+
+/* Contract violations abort. */
+static void death_tests(void)
+{
+    expect_abort(slice_at_len);
+    expect_abort(slice_at_wrong_type);
+    expect_abort(slice_data_wrong_type);
+    expect_abort(slice_null_with_length);
+    expect_abort(slice_size_overflows);
+    expect_abort(slice_zero_size);
+}
+#endif
+
 int main(void)
 {
     test_views_an_array();
@@ -97,5 +164,8 @@ int main(void)
     test_sub_clamps();
     test_empty_is_never_null();
     test_slices_a_vec();
+#ifdef CU_DEATH_TESTS
+    death_tests();
+#endif
     return 0;
 }

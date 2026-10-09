@@ -1,3 +1,4 @@
+#include "death.h"
 #include <assert.h>
 #include <string.h>
 #include "cu.h"
@@ -165,6 +166,47 @@ static void test_scratch_avoids_conflicts(void)
     cu_scratch_release();
 }
 
+#ifdef CU_DEATH_TESTS
+/* Ending the outer scope frees the inner scope's block, and the next push
+ * usually gets a block at the same address. The stale inner scope must still
+ * be caught, not matched to the new block by address. */
+static void end_stale_scope_after_reuse(void)
+{
+    CuArena a;
+    CuTemp outer;
+    CuTemp inner;
+
+    cu_arena_init_with(&a, 64, 0);
+    assert(cu_arena_push_bytes(&a, 8) != NULL);
+    outer = cu_temp_begin(&a);
+    assert(cu_arena_push_bytes(&a, 200) != NULL);
+    inner = cu_temp_begin(&a);
+    cu_temp_end(outer);
+    assert(cu_arena_push_bytes(&a, 200) != NULL);
+    cu_temp_end(inner);
+}
+
+static void end_scope_after_release(void)
+{
+    CuArena a;
+    CuTemp t;
+
+    cu_arena_init_with(&a, 64, 0);
+    assert(cu_arena_push_bytes(&a, 8) != NULL);
+    t = cu_temp_begin(&a);
+    cu_arena_release(&a);
+    assert(cu_arena_push_bytes(&a, 8) != NULL);
+    cu_temp_end(t);
+}
+
+/* Contract violations abort. */
+static void death_tests(void)
+{
+    expect_abort(end_stale_scope_after_reuse);
+    expect_abort(end_scope_after_release);
+}
+#endif
+
 int main(void)
 {
     int debug;
@@ -180,5 +222,8 @@ int main(void)
     test_temp_end_reuses_memory();
     test_default_init();
     test_scratch_avoids_conflicts();
+#ifdef CU_DEATH_TESTS
+    death_tests();
+#endif
     return 0;
 }
