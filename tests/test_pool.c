@@ -189,6 +189,10 @@ static void test_add_fails_at_every_allocation(int debug)
 }
 
 #ifdef CU_DEATH_TESTS
+/* Must-use results land here: asserting success inside a death test would
+ * let an assert, not the contract check, supply the abort. */
+static CuHandle handle_sink;
+
 static void pool_get_wrong_type(void)
 {
     CuArena a;
@@ -212,7 +216,7 @@ static void pool_add_wrong_type(void)
     cu_arena_init(&a);
     CU_POOL_INIT(&p, &a, long);
     v = 1;
-    (void)CU_POOL_ADD(&p, &v);
+    handle_sink = CU_POOL_ADD(&p, &v);
 }
 
 static void pool_null_arena(void)
@@ -229,7 +233,7 @@ static void pool_add_null_value(void)
 
     cu_arena_init(&a);
     CU_POOL_INIT(&p, &a, long);
-    (void)cu_pool_add_(&p, NULL, sizeof(long));
+    handle_sink = cu_pool_add_(&p, NULL, sizeof(long));
 }
 
 static void pool_zero_size(void)
@@ -253,6 +257,7 @@ static void pool_zero_max_gen(void)
 /* Contract violations abort. */
 static void death_tests(void)
 {
+    (void)handle_sink;
     expect_abort(pool_get_wrong_type);
     expect_abort(pool_add_wrong_type);
     expect_abort(pool_zero_size);

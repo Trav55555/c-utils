@@ -235,6 +235,11 @@ static void test_fails_at_every_allocation(int debug)
 }
 
 #ifdef CU_DEATH_TESTS
+/* Must-use results land here: asserting success inside a death test would
+ * let an assert, not the contract check, supply the abort. */
+static unsigned kind_sink;
+static CuLink link_sink;
+
 static void get_unknown_kind(void)
 {
     CuArena a;
@@ -242,7 +247,7 @@ static void get_unknown_kind(void)
 
     cu_arena_init(&a);
     cu_plex_init(&px, &a);
-    (void)CU_PLEX_KIND(&px, Person);
+    kind_sink = CU_PLEX_KIND(&px, Person);
     (void)CU_PLEX_GET(&px, Person, 2, cu_link_null());
 }
 
@@ -257,7 +262,7 @@ static void add_unknown_kind(void)
     p.id = 0;
     p.next = cu_link_null();
     p.pet = cu_link_null();
-    (void)CU_PLEX_ADD(&px, 0, &p);
+    link_sink = CU_PLEX_ADD(&px, 0, &p);
 }
 
 static void get_wrong_size(void)
@@ -284,7 +289,7 @@ static void add_wrong_size(void)
     person = CU_PLEX_KIND(&px, Person);
     d.name = 'x';
     d.owner = cu_link_null();
-    (void)CU_PLEX_ADD(&px, person, &d);
+    link_sink = CU_PLEX_ADD(&px, person, &d);
 }
 
 static void kind_zero_size(void)
@@ -294,12 +299,12 @@ static void kind_zero_size(void)
 
     cu_arena_init(&a);
     cu_plex_init(&px, &a);
-    (void)cu_plex_kind(&px, 0);
+    kind_sink = cu_plex_kind(&px, 0);
 }
 
 static void kind_null_plex(void)
 {
-    (void)cu_plex_kind(NULL, sizeof(long));
+    kind_sink = cu_plex_kind(NULL, sizeof(long));
 }
 
 static void null_arena(void)
@@ -312,6 +317,8 @@ static void null_arena(void)
 /* Contract violations abort. */
 static void death_tests(void)
 {
+    (void)kind_sink;
+    (void)link_sink;
     expect_abort(get_unknown_kind);
     expect_abort(add_unknown_kind);
     expect_abort(get_wrong_size);

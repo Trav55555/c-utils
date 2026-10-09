@@ -18,6 +18,14 @@ static void check_size(const CuVec *v, size_t elem_size)
         abort();
 }
 
+/* Growing under any scope but the vector's own could leave it pointing at
+ * memory that scope's end frees. */
+static void check_scope(const CuVec *v)
+{
+    if (cu_arena_scope(v->arena) != v->scope)
+        abort();
+}
+
 void cu_vec_init(CuVec *v, CuArena *a, size_t elem_size)
 {
     if (v == NULL || a == NULL || elem_size == 0)
@@ -27,6 +35,7 @@ void cu_vec_init(CuVec *v, CuArena *a, size_t elem_size)
     v->len = 0;
     v->cap = 0;
     v->elem_size = elem_size;
+    v->scope = cu_arena_scope(a);
     v->failed = 0;
 }
 
@@ -38,6 +47,9 @@ int cu_vec_reserve(CuVec *v, size_t extra)
 
     if (v == NULL)
         abort();
+    check_scope(v);
+    if (v->failed)
+        return 0;
     if (!cu_size_add(v->len, extra, &need)) {
         v->failed = 1;
         return 0;
@@ -89,7 +101,8 @@ void cu_vec_push_(CuVec *v, const void *elem, size_t elem_size)
     check_size(v, elem_size);
     if (elem == NULL)
         abort();
-    if (v->failed || !cu_vec_reserve(v, 1))
+    check_scope(v);
+    if (!cu_vec_reserve(v, 1))
         return;
     memcpy(v->data + v->len * v->elem_size, elem, v->elem_size);
     v->len++;

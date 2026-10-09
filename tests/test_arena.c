@@ -246,7 +246,10 @@ static void test_limit(int debug)
     assert(cu_arena_push_bytes(&a, 64) != NULL);
     cu_arena_set_limit(&a, 1);
     assert(cu_arena_push_bytes(&a, 64) == NULL);
+    assert(a.refused != 0);
+    /* Releasing clears the refusal along with the failure. */
     cu_arena_release(&a);
+    assert(a.refused == 0 && !cu_arena_failed(&a));
 
     /* No limit by default, and (size_t)-1 lifts one. */
     cu_arena_init_with(&a, 64, debug);

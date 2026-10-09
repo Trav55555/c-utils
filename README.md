@@ -4,7 +4,7 @@ Safe, fast primitives for [Dependable C](https://dependablec.org/) (the C89 subs
 
 | Bug class | Primitive |
 |---|---|
-| Use after free, double free, leaks | `CuArena` with temp scopes and per-thread scratch arenas: no per-object `free` |
+| Use after free, double free, leaks | `CuArena` with temp scopes and per-thread scratch arenas: no per-object `free`; a scope ended out of order or twice aborts, and so does growing a container under a scope that would free its memory |
 | Overflow in `count * size` | `cu_arena_push(a, count, elem_size)` checks the multiply; `cu_size_add` and `cu_size_mul` for your own sizes |
 | Buffer overruns on strings | `CuStr` views carry their length; slicing clamps; `cu_str_at` aborts out of bounds; `CU_LIT` only accepts literals |
 | `NULL` + length bugs | `CuStr.ptr` is never `NULL` |
@@ -49,9 +49,14 @@ With `CU_ARENA_DEBUG` defined, or when built with AddressSanitizer, every push i
 
 `cu_arena_set_limit(&a, max_bytes)` caps the bytes an arena's blocks may hold. A push past the cap fails exactly like running out of memory, so every container's out-of-memory path runs in ordinary tests, and memory spent on untrusted input has a ceiling. After a refusal, `a.held + a.refused` is the smallest cap under which that push succeeds; the tests use it to make each allocation in a scenario fail in turn.
 
+## Temp scopes and containers
+
+Containers (`CuBuilder`, `CuVec`, `CuMap`, `CuPool`, `CuPlex`) keep their memory in their arena and remember the temp scope that was innermost when they were initialised. Any mutating call (append, push, reserve, upsert, add) under another scope aborts, because ending that scope would free the container's memory under it. Reading is allowed under newer scopes while the container's own scope is open. To build something inside a scope, initialise the container inside it too. Using a container after its arena is released or re-initialised is not detected.
+
 ## Checks
 
 ```sh
+make test    # plain build and run of every test; needs only a C compiler
 make check   # dcheck gate: C89 subset, lint, gcc/clang/tcc matrix, analyzer,
              # ASan+UBSan, MSan, -O2 -flto, wasm32-wasi, coverage >= 90%
 make deep    # + Cerberus, valgrind, libFuzzer, CBMC proofs

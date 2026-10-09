@@ -50,6 +50,8 @@ static CU_THREAD_LOCAL int scratch_ready;
 
 int cu_size_add(size_t a, size_t b, size_t *out)
 {
+    if (out == NULL)
+        abort();
     if (a > (size_t)-1 - b)
         return 0;
     *out = a + b;
@@ -58,6 +60,8 @@ int cu_size_add(size_t a, size_t b, size_t *out)
 
 int cu_size_mul(size_t a, size_t b, size_t *out)
 {
+    if (out == NULL)
+        abort();
     if (b != 0 && a > (size_t)-1 / b)
         return 0;
     *out = a * b;
@@ -86,6 +90,8 @@ void cu_arena_init_with(CuArena *a, size_t block_size, int debug)
     a->held = 0;
     a->limit = (size_t)-1;
     a->refused = 0;
+    a->scope = 0;
+    a->scopes = 0;
 }
 
 void cu_arena_init(CuArena *a)
@@ -114,6 +120,10 @@ void cu_arena_release(CuArena *a)
         abort();
     free_blocks_until(a, NULL);
     a->failed = 0;
+    a->refused = 0;
+    /* Open scopes are discarded. scopes keeps counting, so none of them can
+     * match a scope begun later. */
+    a->scope = 0;
 }
 
 static void *push_aligned(CuArena *a, size_t size, size_t align)
@@ -206,6 +216,14 @@ CuTemp cu_temp_begin(CuArena *a)
     t.arena = a;
     t.block = a->head != NULL ? a->head->num : 0;
     t.used = a->head != NULL ? a->head->used : 0;
+    /* Unsigned, so it wraps rather than overflows; ids repeat only after
+     * (size_t)-1 scopes on one arena. 0 means no scope, so it is skipped. */
+    a->scopes++;
+    if (a->scopes == 0)
+        a->scopes = 1;
+    t.id = a->scopes;
+    t.parent = a->scope;
+    a->scope = t.id;
     return t;
 }
 
@@ -215,9 +233,13 @@ void cu_temp_end(CuTemp t)
 
     if (t.arena == NULL)
         abort();
-    /* The scope's block must still be in the chain, and its position must
-     * not be past the current one; otherwise scopes ended out of order.
-     * Block numbers are never reused, so a freed block cannot match. */
+    /* Only the innermost scope may end. This catches scopes ended out of
+     * order, ended twice, or ended after the arena was released. */
+    if (t.id != t.arena->scope)
+        abort();
+    /* Backstops for a forged CuTemp: its block must still be in the chain
+     * and its position not past the current one. Block numbers are never
+     * reused, so a freed block cannot match. */
     b = t.arena->head;
     while (b != NULL && b->num != t.block)
         b = b->prev;
@@ -229,6 +251,14 @@ void cu_temp_end(CuTemp t)
             abort();
         b->used = t.used;
     }
+    t.arena->scope = t.parent;
+}
+
+size_t cu_arena_scope(const CuArena *a)
+{
+    if (a == NULL)
+        abort();
+    return a->scope;
 }
 
 CuTemp cu_scratch_begin(CuArena **conflicts, size_t count)
@@ -276,7 +306,8 @@ void cu_scratch_release(void)
 
     if (!scratch_ready)
         return;
+    /* Released, not reinitialised: a reinitialised arena would number its
+     * scopes from 1 again, and a stale scope could match a new one. */
     for (i = 0; i < CU_SCRATCH_COUNT; i++)
         cu_arena_release(&scratch[i]);
-    scratch_ready = 0;
 }

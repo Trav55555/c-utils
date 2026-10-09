@@ -7,13 +7,25 @@
  *    flag. Failures are sticky on the arena and on builders, so a sequence of
  *    calls can be checked once at the end.
  *  - Contract violations (index out of bounds, temp scopes ended out of
- *    order, no free scratch arena, NULL where a value is required) are
- *    programmer errors and call abort().
+ *    order, no free scratch arena, NULL where a value is required, a
+ *    container grown under the wrong temp scope) are programmer errors and
+ *    call abort().
  *
  * Memory policy: no per-object free. Memory lives in an arena until the arena
  * is released or a temp scope on it ends. Pushed memory is uninitialised;
  * initialise every field explicitly.
- */
+ *
+ * Containers (CuBuilder, CuVec, CuMap, CuPool, CuPlex) keep their memory in
+ * the arena they are given, and remember the temp scope innermost on it
+ * when they are initialised. A mutating call (append, push, reserve,
+ * upsert, add, kind registration) while a different scope is innermost
+ * aborts, whether or not that call would allocate: inside a newer scope,
+ * ending it would free the container's memory under it; after its own scope
+ * ended, that memory is already gone. Reading is allowed under newer scopes,
+ * but only while the container's own scope is still open.
+ *
+ * The check cannot see past cu_arena_release or re-initialising the arena:
+ * a container (or CuTemp) used after either is not caught. */
 #ifndef CU_H
 #define CU_H
 
@@ -45,6 +57,8 @@ typedef struct CuArena {
     size_t held;       /* bytes in live blocks, headers included */
     size_t limit;      /* most bytes held may reach; (size_t)-1: no limit */
     size_t refused;    /* bytes of the last block the limit refused, or 0 */
+    size_t scope;      /* id of the innermost open temp scope, 0 if none */
+    size_t scopes;     /* temp scopes ever begun; numbers the next one */
 } CuArena;
 
 /* A position in an arena. Ending it frees everything pushed since. The block
@@ -52,8 +66,11 @@ typedef struct CuArena {
  * malloc, and a freed pointer must not even be compared. */
 typedef struct CuTemp {
     CuArena *arena;
-    size_t block; /* number of the newest block, 0 if there was none */
+    size_t block;  /* number of the newest block, 0 if there was none */
     size_t used;
+    size_t id;     /* never 0; repeats only after size_t wraps, or after
+                    * the arena is re-initialised */
+    size_t parent; /* the scope that was innermost when this one began */
 } CuTemp;
 
 /* Default block size 64 KiB. Debug mode is on by default when built with
@@ -85,10 +102,14 @@ int cu_arena_failed(const CuArena *a);
  * fail in turn. */
 void cu_arena_set_limit(CuArena *a, size_t max_bytes);
 
-/* Temp scopes must end in reverse order of beginning; ending one out of order
- * aborts. Pointers pushed inside a scope are invalid after it ends. */
+/* Temp scopes must end in reverse order of beginning, each exactly once;
+ * ending any scope but the innermost one aborts. Releasing the arena discards
+ * its open scopes, so ending one afterwards aborts too. Pointers pushed
+ * inside a scope are invalid after it ends. */
 CuTemp cu_temp_begin(CuArena *a);
 void cu_temp_end(CuTemp t);
+/* The id of the innermost temp scope open on a, or 0 if none is. */
+size_t cu_arena_scope(const CuArena *a);
 
 /* Per-thread scratch arenas. Returns a scope on a scratch arena that is not
  * in conflicts[0..count). Pass every arena the caller will allocate results
@@ -139,8 +160,9 @@ int cu_str_find(CuStr s, CuStr needle, size_t *at);
  * *before = s and *after empty. */
 int cu_str_cut(CuStr s, CuStr sep, CuStr *before, CuStr *after);
 
-/* Copies into a. On failure returns the empty string and marks a failed. */
-CuStr cu_str_copy(CuArena *a, CuStr s);
+/* Copies into a. On failure returns the empty string and marks a failed, so
+ * check cu_arena_failed when an empty result is possible. */
+CU_MUST_USE CuStr cu_str_copy(CuArena *a, CuStr s);
 /* NUL-terminated copy for C APIs. Returns NULL on failure. */
 CU_MUST_USE const char *cu_str_cstr_copy(CuArena *a, CuStr s);
 
@@ -163,12 +185,14 @@ CU_MUST_USE int cu_parse_long(CuStr s, unsigned base, long *out);
 /* ---- String builder ---------------------------------------------------- */
 
 /* Appends never fail loudly: a failure marks the builder, later appends are
- * skipped, and cu_sb_finish reports it. Memory comes from the arena. */
+ * skipped, and cu_sb_finish reports it. Memory comes from the arena; append
+ * only under the temp scope the builder was initialised in. */
 typedef struct CuBuilder {
     CuArena *arena;
     char *data;
     size_t len;
     size_t cap;
+    size_t scope;
     int failed;
 } CuBuilder;
 
@@ -214,13 +238,15 @@ void cu_sb_u32be(CuBuilder *b, unsigned long v);
  * match the vector's element size aborts, so most type mix-ups are caught.
  * Pushes never fail loudly: a failure marks the vector, the push is skipped,
  * and cu_vec_failed reports it. Growth moves the elements, so pointers from
- * CU_VEC_AT and CU_VEC_DATA are valid only until the next push or reserve. */
+ * CU_VEC_AT and CU_VEC_DATA are valid only until the next push or reserve.
+ * Push and reserve only under the temp scope the vector was initialised in. */
 typedef struct CuVec {
     CuArena *arena;
     char *data;
     size_t len;
     size_t cap;
     size_t elem_size;
+    size_t scope;
     int failed;
 } CuVec;
 
@@ -237,7 +263,8 @@ typedef struct CuVec {
 /* elem_size 0 aborts. */
 void cu_vec_init(CuVec *v, CuArena *a, size_t elem_size);
 /* Room for at least extra more elements without moving. Returns 0 and marks
- * the vector failed on overflow or out of memory. */
+ * the vector failed on overflow or out of memory; once failed, returns 0
+ * without allocating. */
 int cu_vec_reserve(CuVec *v, size_t extra);
 size_t cu_vec_len(const CuVec *v);
 int cu_vec_failed(const CuVec *v);
@@ -288,8 +315,8 @@ unsigned long cu_hash_fnv1a(CuStr s);
  * an arena. Each node has four children chosen by successive 2-bit slices
  * of the key's hash: nothing is rehashed, entries never move, and nothing
  * is freed individually. Keys are copied into the arena. There is no
- * removal. Value pointers stay valid until the arena is released or a temp
- * scope that was open at insertion ends.
+ * removal. Value pointers stay valid until the arena is released or the
+ * temp scope the map was initialised in ends; upsert only under that scope.
  *
  * Cost per call is the trie's depth, logarithmic for ordinary keys. Keys
  * whose 32-bit hashes are equal share one path that ends in a list, so n
@@ -310,6 +337,7 @@ typedef struct CuMap {
     CuMapNode *last;
     size_t len;
     size_t value_size;
+    size_t scope;
     int failed;
 } CuMap;
 
@@ -357,7 +385,8 @@ typedef struct CuHandle {
  *
  * Slots live in fixed-size pages in the arena: an object's pointer stays
  * valid until the object is removed, and the pool lives until the arena is
- * released. As with CuVec, a size that does not match the pool's value size
+ * released or the temp scope it was initialised in ends; add only under
+ * that scope. As with CuVec, a size that does not match the pool's value size
  * aborts. A failed addition (out of memory) marks the pool and returns the
  * null handle; later additions also fail, and cu_pool_failed reports it. */
 typedef struct CuPool {
@@ -368,6 +397,7 @@ typedef struct CuPool {
     size_t len;       /* live objects */
     size_t value_size;
     unsigned long max_gen;
+    size_t scope;
     int failed;
 } CuPool;
 
@@ -389,7 +419,7 @@ int cu_pool_failed(const CuPool *p);
 CuHandle cu_handle_null(void);
 int cu_handle_is_null(CuHandle h);
 
-CuHandle cu_pool_add_(CuPool *p, const void *v, size_t value_size);
+CU_MUST_USE CuHandle cu_pool_add_(CuPool *p, const void *v, size_t value_size);
 void *cu_pool_get_(const CuPool *p, CuHandle h, size_t value_size);
 
 /* ---- Plex -------------------------------------------------------------- */
@@ -411,7 +441,8 @@ typedef struct CuLink {
  * by the caller that was never registered, or a type whose size differs
  * from its kind's node size, aborts; a link carrying an unknown kind is
  * data and only gets NULL. Node pointers stay valid until the node is
- * removed. A failed registration or addition (out of memory) marks the
+ * removed. Register kinds and add nodes only under the temp scope the plex
+ * was initialised in. A failed registration or addition (out of memory) marks the
  * plex; later ones also fail, and cu_plex_failed reports it. */
 typedef struct CuPlex {
     CuArena *arena;
@@ -428,7 +459,7 @@ typedef struct CuPlex {
 #define CU_PLEX_GET(px, T, kind, link) ((T *)cu_plex_get_((px), (kind), (link), sizeof(T)))
 
 void cu_plex_init(CuPlex *px, CuArena *a);
-unsigned cu_plex_kind(CuPlex *px, size_t node_size);
+CU_MUST_USE unsigned cu_plex_kind(CuPlex *px, size_t node_size);
 /* Removes link's node. Returns 0, changing nothing, if link is null, stale
  * or names an unknown kind. */
 int cu_plex_remove(CuPlex *px, CuLink link);
@@ -438,7 +469,7 @@ int cu_link_is_null(CuLink link);
 /* Whether a and b name the same node; a stale link still equals itself. */
 int cu_link_eq(CuLink a, CuLink b);
 
-CuLink cu_plex_add_(CuPlex *px, unsigned kind, const void *v, size_t node_size);
+CU_MUST_USE CuLink cu_plex_add_(CuPlex *px, unsigned kind, const void *v, size_t node_size);
 void *cu_plex_get_(const CuPlex *px, unsigned kind, CuLink link, size_t node_size);
 
 #endif

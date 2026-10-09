@@ -95,6 +95,8 @@ int cu_str_find(CuStr s, CuStr needle, size_t *at)
     size_t last;
     const char *hit;
 
+    if (at == NULL)
+        abort();
     if (needle.len == 0) {
         *at = 0;
         return 1;
@@ -121,6 +123,8 @@ int cu_str_cut(CuStr s, CuStr sep, CuStr *before, CuStr *after)
 {
     size_t at;
 
+    if (before == NULL || after == NULL)
+        abort();
     if (!cu_str_find(s, sep, &at)) {
         *before = s;
         *after = cu_str_empty();
@@ -135,6 +139,8 @@ CuStr cu_str_copy(CuArena *a, CuStr s)
 {
     char *p;
 
+    if (a == NULL)
+        abort();
     if (s.len == 0)
         return cu_str_empty();
     p = cu_arena_push_bytes(a, s.len);
@@ -149,6 +155,8 @@ const char *cu_str_cstr_copy(CuArena *a, CuStr s)
     size_t n;
     char *p;
 
+    if (a == NULL)
+        abort();
     if (!cu_size_add(s.len, 1, &n)) {
         a->failed = 1;
         return NULL;

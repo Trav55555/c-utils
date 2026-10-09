@@ -34,6 +34,7 @@ void cu_map_init(CuMap *m, CuArena *a, size_t value_size)
     m->last = NULL;
     m->len = 0;
     m->value_size = value_size;
+    m->scope = cu_arena_scope(a);
     m->failed = 0;
 }
 
@@ -102,6 +103,10 @@ void *cu_map_upsert_(CuMap *m, CuStr key, const void *init, size_t init_size, si
     CuMapNode **link;
 
     if (m == NULL || init == NULL || init_size != m->value_size || value_size != m->value_size)
+        abort();
+    /* Checked even for a key already present, so a wrong scope aborts
+     * whatever the keys. */
+    if (cu_arena_scope(m->arena) != m->scope)
         abort();
     link = find(&m->root, key);
     if (*link != NULL)

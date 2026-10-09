@@ -1,3 +1,4 @@
+#include "death.h"
 #include <assert.h>
 #include "cu.h"
 
@@ -32,9 +33,30 @@ static void test_mul(void)
     assert(cu_size_mul(max, max, &r) == 0 && r == 7);
 }
 
+#ifdef CU_DEATH_TESTS
+static void add_null_out(void)
+{
+    assert(cu_size_add(1, 2, NULL));
+}
+
+static void mul_null_out(void)
+{
+    assert(cu_size_mul(1, 2, NULL));
+}
+
+static void death_tests(void)
+{
+    expect_abort(add_null_out);
+    expect_abort(mul_null_out);
+}
+#endif
+
 int main(void)
 {
     test_add();
     test_mul();
+#ifdef CU_DEATH_TESTS
+    death_tests();
+#endif
     return 0;
 }

@@ -112,6 +112,7 @@ static void test_failure_is_sticky(void)
     CuArena a;
     CuVec v;
     long n;
+    size_t held;
 
     cu_arena_init(&a);
     CU_VEC_INIT(&v, &a, long);
@@ -119,6 +120,9 @@ static void test_failure_is_sticky(void)
     CU_VEC_PUSH(&v, &n);
     assert(!cu_vec_reserve(&v, (size_t)-1));
     assert(cu_vec_failed(&v));
+    /* A failed vector takes no more memory, even for a reserve that fits. */
+    held = a.held;
+    assert(!cu_vec_reserve(&v, 1000) && a.held == held);
     CU_VEC_PUSH(&v, &n);
     assert(cu_vec_len(&v) == 1);
     assert(*CU_VEC_AT(&v, long, 0) == 1);

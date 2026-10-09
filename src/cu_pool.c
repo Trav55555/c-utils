@@ -30,6 +30,7 @@ void cu_pool_init_with(CuPool *p, CuArena *a, size_t value_size, unsigned long m
     p->len = 0;
     p->value_size = value_size;
     p->max_gen = max_gen;
+    p->scope = cu_arena_scope(a);
     p->failed = 0;
 }
 
@@ -126,6 +127,10 @@ CuHandle cu_pool_add_(CuPool *p, const void *v, size_t value_size)
     size_t index;
 
     if (p == NULL || v == NULL || value_size != p->value_size)
+        abort();
+    /* Checked even when a free slot needs no memory, so a wrong scope
+     * aborts whatever the pool's state. */
+    if (cu_arena_scope(p->arena) != p->scope)
         abort();
     if (p->failed)
         return cu_handle_null();

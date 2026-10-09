@@ -22,7 +22,7 @@ int cu_parse_ulong(CuStr s, unsigned base, unsigned long *out)
     unsigned d;
     size_t i;
 
-    if (base < 2 || base > 36)
+    if (base < 2 || base > 36 || out == NULL)
         abort();
     if (s.len == 0)
         return 0;
@@ -44,6 +44,8 @@ int cu_parse_long(CuStr s, unsigned base, long *out)
     unsigned long mag;
     int neg;
 
+    if (out == NULL)
+        abort();
     neg = 0;
     if (s.len > 0 && (s.ptr[0] == '-' || s.ptr[0] == '+')) {
         neg = s.ptr[0] == '-';
@@ -72,7 +74,16 @@ void cu_sb_init(CuBuilder *b, CuArena *a)
     b->data = NULL;
     b->len = 0;
     b->cap = 0;
+    b->scope = cu_arena_scope(a);
     b->failed = 0;
+}
+
+/* Every append starts here. Growing under any scope but the builder's own
+ * could leave it pointing at memory that scope's end frees. */
+static void check_builder(const CuBuilder *b)
+{
+    if (b == NULL || cu_arena_scope(b->arena) != b->scope)
+        abort();
 }
 
 /* Room for n > 0 more bytes, or NULL after marking the builder failed. */
@@ -113,6 +124,7 @@ static void append(CuBuilder *b, const char *src, size_t n)
 {
     char *dst;
 
+    check_builder(b);
     if (n == 0)
         return;
     dst = reserve(b, n);
@@ -147,17 +159,27 @@ static size_t to_digits(unsigned long v, unsigned base, char *buf)
     return n;
 }
 
+/* Padding and digits are reserved together, so a width too large to fit
+ * fails once instead of appending zeros until memory runs out. */
 static void append_number(CuBuilder *b, unsigned long v, unsigned base, size_t min_digits)
 {
     char buf[CU_ULONG_DIGITS];
     size_t n;
+    size_t pad;
+    size_t total;
+    char *dst;
 
+    check_builder(b);
     n = to_digits(v, base, buf);
-    while (min_digits > n) {
-        cu_sb_char(b, '0');
-        min_digits--;
-    }
-    append(b, buf + (CU_ULONG_DIGITS - n), n);
+    pad = min_digits > n ? min_digits - n : 0;
+    /* pad + n is at most max(min_digits, n), so it cannot overflow. */
+    total = pad + n;
+    dst = reserve(b, total);
+    if (dst == NULL)
+        return;
+    memset(dst, '0', pad);
+    memcpy(dst + pad, buf + (CU_ULONG_DIGITS - n), n);
+    b->len += total;
 }
 
 void cu_sb_ulong(CuBuilder *b, unsigned long v)
@@ -183,6 +205,8 @@ void cu_sb_hex(CuBuilder *b, unsigned long v, size_t min_digits)
 
 int cu_sb_finish(CuBuilder *b, CuStr *out)
 {
+    if (b == NULL || out == NULL)
+        abort();
     if (b->failed) {
         *out = cu_str_empty();
         return 0;

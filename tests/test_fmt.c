@@ -1,3 +1,4 @@
+#include "death.h"
 #include <assert.h>
 #include <limits.h>
 #include "cu.h"
@@ -142,6 +143,30 @@ static void test_parse_long(CuArena *a)
     assert(!cu_parse_long(cu_str_cstr(bumped), 10, &v));
 }
 
+/* Padding is reserved in one piece: a width that cannot fit fails at once
+ * instead of appending zeros one at a time until memory runs out. */
+static void test_hex_padding(int debug)
+{
+    CuArena a;
+    CuBuilder b;
+    CuStr out;
+
+    cu_arena_init_with(&a, 64, debug);
+    cu_sb_init(&b, &a);
+    cu_sb_hex(&b, 0xabcUL, 6);
+    cu_sb_hex(&b, 0xabcUL, 2);
+    assert(cu_sb_finish(&b, &out) && cu_str_eq(out, CU_LIT("000abcabc")));
+
+    cu_arena_set_limit(&a, a.held + 4096);
+    cu_sb_init(&b, &a);
+    cu_sb_hex(&b, 0, (size_t)-1);
+    assert(!cu_sb_finish(&b, &out));
+    cu_sb_init(&b, &a);
+    cu_sb_hex(&b, 0, (size_t)1 << 20);
+    assert(!cu_sb_finish(&b, &out) && cu_arena_failed(&a));
+    cu_arena_release(&a);
+}
+
 /* Each run raises the arena's limit to held + refused, just enough for the
  * allocation that failed last time, so every allocation fails in turn. */
 static void test_append_fails_at_every_allocation(int debug)
@@ -173,6 +198,69 @@ static void test_append_fails_at_every_allocation(int debug)
     }
 }
 
+#ifdef CU_DEATH_TESTS
+static void char_null_builder(void)
+{
+    cu_sb_char(NULL, 'x');
+}
+
+static void empty_str_null_builder(void)
+{
+    cu_sb_str(NULL, cu_str_empty());
+}
+
+static void hex_null_builder(void)
+{
+    cu_sb_hex(NULL, 1, 4);
+}
+
+static void finish_null_builder(void)
+{
+    CuStr out;
+
+    assert(cu_sb_finish(NULL, &out));
+}
+
+static void finish_null_out(void)
+{
+    CuArena a;
+    CuBuilder b;
+
+    cu_arena_init(&a);
+    cu_sb_init(&b, &a);
+    assert(cu_sb_finish(&b, NULL));
+}
+
+/* Valid input, so without the check the parser would write through NULL
+ * and die by SIGSEGV, not SIGABRT. */
+static void parse_ulong_null_out(void)
+{
+    int ok;
+
+    ok = cu_parse_ulong(CU_LIT("1"), 10, NULL);
+    (void)ok;
+}
+
+static void parse_long_null_out(void)
+{
+    int ok;
+
+    ok = cu_parse_long(CU_LIT("-1"), 10, NULL);
+    (void)ok;
+}
+
+static void death_tests(void)
+{
+    expect_abort(char_null_builder);
+    expect_abort(empty_str_null_builder);
+    expect_abort(hex_null_builder);
+    expect_abort(finish_null_builder);
+    expect_abort(finish_null_out);
+    expect_abort(parse_ulong_null_out);
+    expect_abort(parse_long_null_out);
+}
+#endif
+
 int main(void)
 {
     CuArena a;
@@ -185,10 +273,14 @@ int main(void)
         test_builder_grows(&a);
         test_builder_failure_is_sticky(&a);
         test_append_fails_at_every_allocation(debug);
+        test_hex_padding(debug);
         test_parse_ulong(&a);
         test_parse_long(&a);
         assert(cu_arena_failed(&a) == 0);
         cu_arena_release(&a);
     }
+#ifdef CU_DEATH_TESTS
+    death_tests();
+#endif
     return 0;
 }

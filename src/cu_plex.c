@@ -45,6 +45,8 @@ unsigned cu_plex_kind(CuPlex *px, size_t node_size)
 
     if (px == NULL || node_size == 0)
         abort();
+    if (cu_arena_scope(px->arena) != px->kinds.scope)
+        abort();
     if (px->failed)
         return 0;
     if (cu_vec_len(&px->kinds) >= UINT_MAX) {
@@ -75,6 +77,8 @@ CuLink cu_plex_add_(CuPlex *px, unsigned kind, const void *v, size_t node_size)
     CuLink link;
 
     pool = pool_of(px, kind);
+    if (cu_arena_scope(px->arena) != pool->scope)
+        abort();
     if (px->failed)
         return cu_link_null();
     link.h = cu_pool_add_(pool, v, node_size);

@@ -6,9 +6,12 @@ Each item is one slice that passes `make check` (and `make deep` before it is ca
 
 Done: arena + temp scopes + scratch arenas, debug arena mode, checked size math, `CuStr`, ASCII, parsing, string builder, `CuVec`, `CuSlice`, `CuMap` hash trie, `CuPool` with generational handles, `CuPlex` typed links, byte readers and writers (8, 16 and 32 bits, both byte orders). 64-bit readers wait for a 64-bit type: C89 has none, and `unsigned long` is 32 bits on Windows and wasm32. Typed slice wrappers (`CuSliceLong` and so on) wait for a caller that needs more than `CU_SLICE_AT`. `CuMap` hashes with 32-bit FNV-1a, unseeded, so colliding keys are easy to construct and cost O(n) each; a seeded or 64-bit hash waits for a use with untrusted keys.
 
+Temp scopes carry ids, so ending one out of order or twice aborts, and each container aborts when grown under a scope other than the one it was made in. The `regions` check below is the static version of that runtime check.
+
 Next, in order:
 
-1. **`regions` check.** Static check for arena lifetime bugs (design: `dependable-c-agent-toolchain/docs/REGIONS.md`). This repo is its first real target.
+1. **A first consumer.** No new core primitive until real code needs it. Build the smallest real program on the core (the whole-file reader from layer 2 and line splitting from layer 3 are candidates) and let it decide what the core lacks. It is also the first benchmark of "fast": vector and builder growth abandon their old buffers in the arena, and each map entry costs three pushes; measure before changing either.
+2. **`regions` check.** Static check for arena lifetime bugs (design: `dependable-c-agent-toolchain/docs/REGIONS.md`). This repo and its first consumer are its first real targets.
 
 ## 2. Platform module
 

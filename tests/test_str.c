@@ -1,3 +1,4 @@
+#include "death.h"
 #include <assert.h>
 #include <string.h>
 #include "cu.h"
@@ -131,6 +132,66 @@ static void test_copy_failure(int debug)
     cu_arena_release(&a);
 }
 
+#ifdef CU_DEATH_TESTS
+static void find_null_at(void)
+{
+    assert(cu_str_find(CU_LIT("ab"), CU_LIT("b"), NULL));
+}
+
+static void find_empty_null_at(void)
+{
+    assert(cu_str_find(CU_LIT("ab"), cu_str_empty(), NULL));
+}
+
+static void cut_null_before(void)
+{
+    CuStr after;
+
+    assert(cu_str_cut(CU_LIT("a=b"), CU_LIT("="), NULL, &after));
+}
+
+static void cut_null_after(void)
+{
+    CuStr before;
+
+    assert(cu_str_cut(CU_LIT("a=b"), CU_LIT("="), &before, NULL));
+}
+
+/* An empty copy needs no memory, but the arena is still required. */
+static void copy_null_arena(void)
+{
+    CuStr copy;
+
+    copy = cu_str_copy(NULL, cu_str_empty());
+    assert(copy.len == 0);
+}
+
+static void cstr_copy_null_arena(void)
+{
+    assert(cu_str_cstr_copy(NULL, cu_str_empty()) != NULL);
+}
+
+/* The overflow path, which used to mark the arena before checking it. */
+static void cstr_copy_null_arena_overflow(void)
+{
+    char one;
+
+    one = 'x';
+    assert(cu_str_cstr_copy(NULL, cu_str_n(&one, (size_t)-1)) == NULL);
+}
+
+static void death_tests(void)
+{
+    expect_abort(find_null_at);
+    expect_abort(find_empty_null_at);
+    expect_abort(cut_null_before);
+    expect_abort(cut_null_after);
+    expect_abort(copy_null_arena);
+    expect_abort(cstr_copy_null_arena);
+    expect_abort(cstr_copy_null_arena_overflow);
+}
+#endif
+
 int main(void)
 {
     test_construct();
@@ -143,5 +204,8 @@ int main(void)
     test_copy(1);
     test_copy_failure(0);
     test_copy_failure(1);
+#ifdef CU_DEATH_TESTS
+    death_tests();
+#endif
     return 0;
 }
