@@ -53,6 +53,10 @@ With `CU_ARENA_DEBUG` defined, or when built with AddressSanitizer, every push i
 
 Containers (`CuBuilder`, `CuVec`, `CuMap`, `CuPool`, `CuPlex`) keep their memory in their arena and remember the temp scope that was innermost when they were initialised. Any mutating call (append, push, reserve, upsert, add) under another scope aborts, because ending that scope would free the container's memory under it. Reading is allowed under newer scopes while the container's own scope is open. To build something inside a scope, initialise the container inside it too. Growing a container after its arena is released aborts too. Re-initialising an arena that still has containers is not detected.
 
+## Typed access
+
+Containers and slices store values as bytes and hand them back as `void *`. Each typed macro (`CU_VEC_AT`, `CU_SLICE_AT`, `CU_MAP_GET`, `CU_POOL_GET`, `CU_PLEX_GET` and the rest) passes `sizeof` its type, and the call aborts if that differs from the size the container was initialised with. A type of a different size is therefore caught on every call, but a different type of the same size (`int` for `float`, or two structs that happen to match) is not: the size is the only type information that survives. `CuPlex` adds a kind number to each link, so links are checked by kind as well as size. Code held to MISRA-style rules should still treat each conversion from `void *` as a deviation to justify.
+
 ## Checks
 
 ```sh
