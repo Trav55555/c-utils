@@ -65,3 +65,7 @@ make deep    # + Cerberus, valgrind, libFuzzer, CBMC proofs
 `dcheck` lives in `~/projects/dependable-c-agent-toolchain`; override with `make DCHECK=/path/to/dcheck`.
 
 Proofs: `proofs/proof_str.c` proves slicing, find and cut for every string of up to 4 bytes; `proofs/proof_size.c` proves `cu_size_add` for all inputs. `cu_size_mul` is fuzzed against `__builtin_mul_overflow` (`fuzz/fuzz_size.c`) because a 64-bit multiply proof does not finish in CBMC.
+
+## License
+
+MIT. See `LICENSE`.
