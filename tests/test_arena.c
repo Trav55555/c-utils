@@ -261,6 +261,40 @@ static void test_limit(int debug)
     cu_arena_release(&a);
 }
 
+/* cu_arena_fail_at fails exactly one block allocation, the one with that
+ * attempt number; the ones before and after it succeed. A push that fits
+ * in the current block makes no attempt, except in debug mode, where every
+ * push is its own allocation. */
+static void test_fail_at(int debug)
+{
+    CuArena a;
+    size_t before;
+
+    cu_arena_init_with(&a, 64, debug);
+    assert(a.attempts == 0 && a.fail_at == (size_t)-1);
+    cu_arena_fail_at(&a, debug ? 2 : 1);
+    assert(cu_arena_push_bytes(&a, 8) != NULL);
+    assert(a.attempts == 1 && !cu_arena_failed(&a));
+    /* Fits in the 64-byte block the first push made. */
+    assert(cu_arena_push_bytes(&a, 8) != NULL);
+    assert(a.attempts == (debug ? 2u : 1u));
+    before = a.attempts;
+    assert(cu_arena_push_bytes(&a, 100) == NULL);
+    assert(a.attempts == before + 1 && cu_arena_failed(&a));
+    assert(cu_arena_push_bytes(&a, 100) != NULL);
+    assert(a.attempts == before + 2);
+    /* The count runs on across a release, and (size_t)-1 fails none. */
+    cu_arena_release(&a);
+    before = a.attempts;
+    cu_arena_fail_at(&a, (size_t)-1);
+    assert(cu_arena_push_bytes(&a, 100) != NULL);
+    assert(a.attempts == before + 1 && !cu_arena_failed(&a));
+    /* The failing attempt is the next one, even right after a release. */
+    cu_arena_fail_at(&a, a.attempts);
+    assert(cu_arena_push(&a, 1, 100) == NULL);
+    cu_arena_release(&a);
+}
+
 #ifdef CU_DEATH_TESTS
 /* Ending the outer scope frees the inner scope's block, and the next push
  * usually gets a block at the same address. The stale inner scope must still
@@ -314,6 +348,7 @@ int main(void)
         test_release_then_reuse(debug);
         test_debug_mode_separates_pushes(debug);
         test_limit(debug);
+        test_fail_at(debug);
         test_header_overflow_fails(debug);
     }
     test_temp_end_reuses_memory();

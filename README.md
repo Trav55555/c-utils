@@ -47,7 +47,9 @@ With `CU_ARENA_DEBUG` defined, or when built with AddressSanitizer, every push i
 
 ## Arena limits
 
-`cu_arena_set_limit(&a, max_bytes)` caps the bytes an arena's blocks may hold. A push past the cap fails exactly like running out of memory, so every container's out-of-memory path runs in ordinary tests, and memory spent on untrusted input has a ceiling. After a refusal, `a.held + a.refused` is the smallest cap under which that push succeeds; the tests use it to make each allocation in a scenario fail in turn.
+`cu_arena_set_limit(&a, max_bytes)` caps the bytes an arena's blocks may hold, so memory spent on untrusted input has a ceiling. A push past the cap fails exactly like running out of memory. After a refusal, `a.held + a.refused` is the smallest cap under which that push succeeds.
+
+`cu_arena_fail_at(&a, n)` is the test hook: block allocation number `n` (counted in `a.attempts`) fails, and every other one succeeds. Each container's tests step `n` from 0 until a run makes no more than `n` allocations, so every out-of-memory path runs in ordinary tests. Failing one allocation, not every one past a cap, is what catches code that ignores a failure: later allocations still succeed, so nothing hides it.
 
 ## Temp scopes and containers
 

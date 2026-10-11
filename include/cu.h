@@ -59,6 +59,9 @@ typedef struct CuArena {
     size_t held;       /* bytes in live blocks, headers included */
     size_t limit;      /* most bytes held may reach; (size_t)-1: no limit */
     size_t refused;    /* bytes of the last block the limit refused, or 0 */
+    size_t attempts;   /* block allocations tried, failed ones included;
+                        * never reset */
+    size_t fail_at;    /* the attempt that fails; (size_t)-1: none */
     size_t scope;      /* innermost open temp scope's id, else the base's */
     size_t scopes;     /* scope ids ever issued; numbers the next one */
 } CuArena;
@@ -105,6 +108,15 @@ int cu_arena_failed(const CuArena *a);
  * memory spent on untrusted input, and in tests to make each allocation
  * fail in turn. */
 void cu_arena_set_limit(CuArena *a, size_t max_bytes);
+
+/* Test hook: the block allocation numbered n (counting attempts from 0 in
+ * a.attempts) fails exactly as if memory ran out, and every other one
+ * succeeds. Only a push that needs a new block is an attempt; in debug
+ * mode that is every push. Tests step n from 0 until a run makes no more
+ * than n attempts, so each allocation fails alone; a cap would also fail
+ * the allocations after it, which can hide a failure the code ignores.
+ * (size_t)-1, the default, fails none. */
+void cu_arena_fail_at(CuArena *a, size_t n);
 
 /* Temp scopes must end in reverse order of beginning, each exactly once;
  * ending any scope but the innermost one aborts. Releasing the arena discards

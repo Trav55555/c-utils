@@ -101,6 +101,8 @@ void cu_arena_init_with(CuArena *a, size_t block_size, int debug)
     a->held = 0;
     a->limit = (size_t)-1;
     a->refused = 0;
+    a->attempts = 0;
+    a->fail_at = (size_t)-1;
     a->scopes = 0;
     a->scope = next_scope_id(a);
 }
@@ -166,6 +168,11 @@ static void *push_aligned(CuArena *a, size_t size, size_t align)
         a->failed = 1;
         return NULL;
     }
+    /* Counting wraps only after 2^N attempts; the injected one fails. */
+    if (a->attempts++ == a->fail_at) {
+        a->failed = 1;
+        return NULL;
+    }
     if (a->held > a->limit || total > a->limit - a->held) {
         a->refused = total;
         a->failed = 1;
@@ -209,6 +216,13 @@ void cu_arena_set_limit(CuArena *a, size_t max_bytes)
     if (a == NULL)
         abort();
     a->limit = max_bytes;
+}
+
+void cu_arena_fail_at(CuArena *a, size_t n)
+{
+    if (a == NULL)
+        abort();
+    a->fail_at = n;
 }
 
 int cu_arena_failed(const CuArena *a)

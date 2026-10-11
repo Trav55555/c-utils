@@ -150,8 +150,9 @@ static void test_iterates_in_insertion_order(CuArena *a)
     assert(CU_MAP_NEXT(&it, long, &key) == NULL);
 }
 
-/* Each run raises the arena's limit to held + refused, just enough for the
- * allocation that failed last time, so every allocation fails in turn. */
+/* Run n fails allocation n alone, so each allocation fails in turn while
+ * the ones after it succeed; the runs end when one makes no more than n
+ * allocations, and only that run may succeed. */
 static void test_upsert_fails_at_every_allocation(int debug)
 {
     static const char *const keys[] = {"one", "two", "", "four", "liquid", "costarring"};
@@ -159,18 +160,17 @@ static void test_upsert_fails_at_every_allocation(int debug)
     CuMap m;
     CuMapIter it;
     CuStr key;
-    size_t limit;
-    size_t next;
+    size_t at;
+    int injected;
     long i;
     long k;
     long inserted;
     long *v;
     int done;
 
-    done = 0;
-    for (limit = 0; !done; limit = next) {
+    for (at = 0;; at++) {
         cu_arena_init_with(&a, 64, debug);
-        cu_arena_set_limit(&a, limit);
+        cu_arena_fail_at(&a, at);
         CU_MAP_INIT(&m, &a, long);
         inserted = 0;
         for (i = 0; i < 6; i++) {
@@ -193,10 +193,12 @@ static void test_upsert_fails_at_every_allocation(int debug)
             assert(*CU_MAP_NEXT(&it, long, &key) == k);
         }
         assert(CU_MAP_NEXT(&it, long, &key) == NULL);
-        /* Every run gets one allocation further. */
-        next = a.held + a.refused;
-        assert(done || next > limit);
+        /* The run succeeds exactly when the failure was never reached. */
+        injected = a.attempts > at;
+        assert(done == !injected);
         cu_arena_release(&a);
+        if (!injected)
+            break;
     }
 }
 

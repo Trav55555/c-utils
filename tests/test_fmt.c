@@ -167,22 +167,22 @@ static void test_hex_padding(int debug)
     cu_arena_release(&a);
 }
 
-/* Each run raises the arena's limit to held + refused, just enough for the
- * allocation that failed last time, so every allocation fails in turn. */
+/* Run n fails allocation n alone, so each allocation fails in turn while
+ * the ones after it succeed; the runs end when one makes no more than n
+ * allocations, and only that run may succeed. */
 static void test_append_fails_at_every_allocation(int debug)
 {
     CuArena a;
     CuBuilder b;
     CuStr out;
-    size_t limit;
-    size_t next;
+    size_t at;
+    int injected;
     int i;
     int done;
 
-    done = 0;
-    for (limit = 0; !done; limit = next) {
+    for (at = 0;; at++) {
         cu_arena_init_with(&a, 64, debug);
-        cu_arena_set_limit(&a, limit);
+        cu_arena_fail_at(&a, at);
         cu_sb_init(&b, &a);
         for (i = 0; i < 40; i++)
             cu_sb_str(&b, CU_LIT("0123456789"));
@@ -191,10 +191,12 @@ static void test_append_fails_at_every_allocation(int debug)
             assert(out.len == 400 && cu_str_starts_with(out, CU_LIT("01234567890123")));
         else
             assert(out.len == 0 && cu_arena_failed(&a));
-        /* Every run gets one allocation further. */
-        next = a.held + a.refused;
-        assert(done || next > limit);
+        /* The run succeeds exactly when the failure was never reached. */
+        injected = a.attempts > at;
+        assert(done == !injected);
         cu_arena_release(&a);
+        if (!injected)
+            break;
     }
 }
 
