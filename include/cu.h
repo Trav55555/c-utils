@@ -32,6 +32,7 @@
 #define CU_H
 
 #include <stddef.h>
+#include <stdio.h>
 
 #if defined(__GNUC__) && !defined(__TINYC__)
 #define CU_MUST_USE __attribute__((warn_unused_result))
@@ -488,5 +489,59 @@ int cu_link_eq(CuLink a, CuLink b);
 
 CU_MUST_USE CuLink cu_plex_add_(CuPlex *px, unsigned kind, const void *v, size_t node_size);
 void *cu_plex_get_(const CuPlex *px, unsigned kind, CuLink link, size_t node_size);
+
+/* ---- Files: the platform module's first part ---------------------------
+ *
+ * Whole-file reads into an arena. The bytes are anything (NULs included)
+ * and live as long as the arena's current scope; *out views them, and is
+ * the empty string on failure. A read fails (returns 0) if the file cannot
+ * be opened or read, with errno supplied by stdio, or if memory runs out,
+ * with the arena's sticky failure flag set. Cleanup preserves an earlier
+ * failure's errno. Buffers remain arena-owned until scope end or release,
+ * including on failure. NULL arguments abort. */
+
+/* Reads the file at path and always closes it. A nonempty file needs one
+ * arena push of its size plus one byte when the size can be found and
+ * stays unchanged; a growing file is still read to its end. Empty files
+ * need no allocation. */
+CU_MUST_USE int cu_file_read(CuArena *a, const char *path, CuStr *out);
+
+/* Reads f from its current position to EOF (standard input, a pipe).
+ * Leaves f open, with its position and EOF/error indicators changed.
+ * Even an empty stream needs an initial buffer allocation. */
+CU_MUST_USE int cu_stream_read(CuArena *a, FILE *f, CuStr *out);
+
+/* Chunked, blocking input without seeks or arena allocations. A CuInput
+ * owns a file opened by cu_input_open, or borrows a FILE attached by
+ * cu_input_attach at its current position. Keep borrowed streams open and
+ * use them exclusively until detaching. Do not copy an active owner or
+ * reinitialize one before closing it. NULL arguments abort. */
+typedef enum {
+    CU_INPUT_ERROR = -1,
+    CU_INPUT_END = 0,
+    CU_INPUT_DATA = 1
+} CuInputStatus;
+
+typedef struct CuInput {
+    FILE *stream;
+    int owns;
+    CuInputStatus state; /* next-read state, not necessarily last result */
+    int error;          /* saved stdio errno; zero is possible on error */
+} CuInput;
+
+CU_MUST_USE int cu_input_open(CuInput *in, const char *path);
+void cu_input_attach(CuInput *in, FILE *stream);
+/* cap must be positive. DATA publishes 1..cap bytes in caller-owned buf;
+ * END and ERROR publish *n == 0. A failed read may consume bytes and change
+ * buf, but none are published. Error wins over EOF and is sticky, including
+ * after failed open. A final partial DATA can cache END for the next call.
+ * Existing FILE error flags are reported with errno at entry. No call
+ * clears the borrowed stream's flags. Reads after successful close abort. */
+CU_MUST_USE CuInputStatus cu_input_read(CuInput *in, void *buf, size_t cap, size_t *n);
+/* Closes an owned stream or detaches a borrowed one. Idempotent: returns
+ * the same aggregate status on repeats, 0 for any prior or close error,
+ * preserving the first saved errno even when zero. No stream is retained. */
+CU_MUST_USE int cu_input_close(CuInput *in);
+int cu_input_errno(const CuInput *in);
 
 #endif

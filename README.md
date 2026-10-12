@@ -59,6 +59,51 @@ Containers (`CuBuilder`, `CuVec`, `CuMap`, `CuPool`, `CuPlex`) keep their memory
 
 Containers and slices store values as bytes and hand them back as `void *`. Each typed macro (`CU_VEC_AT`, `CU_SLICE_AT`, `CU_MAP_GET`, `CU_POOL_GET`, `CU_PLEX_GET` and the rest) passes `sizeof` its type, and the call aborts if that differs from the size the container was initialised with. A type of a different size is therefore caught on every call, but a different type of the same size (`int` for `float`, or two structs that happen to match) is not: the size is the only type information that survives. `CuPlex` adds a kind number to each link, so links are checked by kind as well as size. Code held to MISRA-style rules should still treat each conversion from `void *` as a deviation to justify.
 
+## Files and streams
+
+`cu_file_read(&arena, path, &text)` reads a whole file, including NUL bytes,
+and closes it on every path. `cu_stream_read(&arena, stream, &text)` reads
+from the stream's current position to EOF and leaves it open. Both return
+0 on I/O or allocation failure and set `text` to an empty, non-NULL view.
+Allocation failures mark the arena; I/O failures leave its memory status
+alone. The view lives until its arena scope ends.
+
+The file size is an allocation hint. If it cannot be queried, the reader
+rewinds and grows the buffer as needed. Streams also grow by doubling,
+leaving old buffers in the arena until release. Use the arena byte limit
+when reading untrusted input.
+
+`CuInput` provides chunked input without seeks or arena allocations. Open
+an owned file with `cu_input_open`, or borrow an existing `FILE` at its
+current position with `cu_input_attach`. The caller supplies each buffer.
+
+```c
+CuInput input;
+CuInputStatus status;
+char buffer[4096];
+size_t n;
+
+if (cu_input_open(&input, "data.txt")) {
+    while ((status = cu_input_read(&input, buffer, sizeof buffer, &n)) == CU_INPUT_DATA) {
+        /* Consume exactly n bytes; buffer is not NUL-terminated. */
+    }
+    if (!cu_input_close(&input)) {
+        /* Inspect cu_input_errno(&input): first read or close error. */
+    }
+}
+```
+
+`CU_INPUT_END` and `CU_INPUT_ERROR` publish zero bytes. A failed read may
+consume bytes and modify the buffer but publishes none. EOF and error
+states are sticky. Closing preserves the first error, including errno
+zero, and repeated closes do not call stdio again. A borrowed stream stays
+open with its position and flags unchanged by detach. Keep its use
+exclusive while attached, and close an active owner before reinitializing
+or copying storage. Reads after successful close abort.
+
+The first consumer is the streaming literal-search slice of
+[cgrep](../cgrep/README.md).
+
 ## Checks
 
 ```sh
