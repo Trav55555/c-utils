@@ -122,8 +122,8 @@ CU_MUST_USE char *cu_arena_push_bytes(CuArena *a, size_t n);
  * (or with none open), and new_size fits in the rest of its block, p grows
  * in place: no block allocation, held unchanged. When p is all there is in
  * the newest block (it starts at the block's beginning) and that block was
- * made under the innermost scope, the block is reallocated to fit: one block allocation attempt (cu_arena_fail_at),
- * held grows by the bytes added, the limit applies to those bytes, and a
+ * made under the innermost scope, the block is reallocated to fit: one
+ * block allocation attempt (cu_arena_fail_at), held grows by the bytes added, the limit applies to those bytes, and a
  * refusal records them in refused. Otherwise this is cu_arena_push(a,
  * new_size, 1) and a copy, and p's old bytes stay held until their scope
  * ends or the arena is released.
@@ -136,7 +136,7 @@ CU_MUST_USE char *cu_arena_push_bytes(CuArena *a, size_t n);
  * before the innermost temp scope is never grown in place or reallocated
  * (nor is the block that scope began in), so ending the scope frees exactly
  * what was pushed in it. old_size 0 always gets a new push. */
-/** regions: returns alloc(a) */
+/** regions: returns alloc(a); requires p in a */
 CU_MUST_USE void *cu_arena_grow(CuArena *a, void *p, size_t old_size, size_t new_size);
 
 /* Grows p (old_size bytes from a, not NULL) to new_size bytes in place, as

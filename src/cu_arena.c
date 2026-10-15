@@ -347,7 +347,7 @@ void *cu_arena_grow(CuArena *a, void *p, size_t old_size, size_t new_size) {
   b = newest_in_scope(a, p, old_size);
   if (b != NULL && b->used == old_size && b->num != a->mark_block)
     return grow_head(a, new_size);
-  q = (char *)push_aligned(a, new_size, CU_ALIGN);
+  q = (char *)cu_arena_push(a, new_size, 1);
   if (q != NULL)
     memcpy(q, p, old_size);
   return q;
