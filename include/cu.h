@@ -45,7 +45,9 @@
 
 /* Store a + b (a * b) in *out and return 1, or return 0 if it overflows
  * size_t. *out is unchanged on overflow. */
+/** regions: borrows */
 CU_MUST_USE int cu_size_add(size_t a, size_t b, size_t *out);
+/** regions: borrows */
 CU_MUST_USE int cu_size_mul(size_t a, size_t b, size_t *out);
 
 /* ---- Arena ------------------------------------------------------------- */
@@ -88,20 +90,25 @@ typedef struct CuTemp {
 
 /* Default block size 64 KiB. Debug mode is on by default when built with
  * AddressSanitizer or with CU_ARENA_DEBUG defined. */
+/** regions: borrows */
 void cu_arena_init(CuArena *a);
+/** regions: borrows */
 void cu_arena_init_with(CuArena *a, size_t block_size, int debug);
 
 /* Frees every block, the cached one included. The arena can be pushed to
  * again afterwards, but temp scopes and containers from before the release
  * are dead: ending or growing one aborts. */
+/** regions: borrows */
 void cu_arena_release(CuArena *a);
 
 /* Uninitialised memory for count elements of elem_size bytes, aligned for any
  * type. Returns NULL and marks the arena failed if count * elem_size
  * overflows or memory runs out. A zero-size push returns a non-NULL pointer. */
+/** regions: returns alloc(a) */
 CU_MUST_USE void *cu_arena_push(CuArena *a, size_t count, size_t elem_size);
 
 /* Uninitialised bytes with no alignment. Same failure rules as cu_arena_push. */
+/** regions: returns alloc(a) */
 CU_MUST_USE char *cu_arena_push_bytes(CuArena *a, size_t n);
 
 #define CU_PUSH(a, T, n) ((T *)cu_arena_push((a), (n), sizeof(T)))
@@ -129,6 +136,7 @@ CU_MUST_USE char *cu_arena_push_bytes(CuArena *a, size_t n);
  * before the innermost temp scope is never grown in place or reallocated
  * (nor is the block that scope began in), so ending the scope frees exactly
  * what was pushed in it. old_size 0 always gets a new push. */
+/** regions: returns alloc(a) */
 CU_MUST_USE void *cu_arena_grow(CuArena *a, void *p, size_t old_size, size_t new_size);
 
 /* Grows p (old_size bytes from a, not NULL) to new_size bytes in place, as
@@ -136,8 +144,10 @@ CU_MUST_USE void *cu_arena_grow(CuArena *a, void *p, size_t old_size, size_t new
  * changing nothing, when that is not possible. It never allocates, moves
  * or frees. A new_size of at most old_size returns 1; old_size 0 returns
  * 0. CuBuilder grows this way or with a new push, never by realloc. */
+/** regions: borrows */
 CU_MUST_USE int cu_arena_extend(CuArena *a, void *p, size_t old_size, size_t new_size);
 
+/** regions: borrows */
 int cu_arena_failed(const CuArena *a);
 
 /* Caps the bytes the arena's blocks may hold, headers included, the cached
@@ -150,6 +160,7 @@ int cu_arena_failed(const CuArena *a);
  * block. The default, (size_t)-1, means no cap. Use it to bound memory
  * spent on untrusted input, and in tests to make each allocation fail in
  * turn. */
+/** regions: borrows */
 void cu_arena_set_limit(CuArena *a, size_t max_bytes);
 
 /* Test hook: the block allocation numbered n (counting attempts from 0 in
@@ -159,6 +170,7 @@ void cu_arena_set_limit(CuArena *a, size_t max_bytes);
  * n from 0 until a run makes no more than n attempts, so each allocation
  * fails alone; a cap would also fail the allocations after it, which can
  * hide a failure the code ignores. (size_t)-1, the default, fails none. */
+/** regions: borrows */
 void cu_arena_fail_at(CuArena *a, size_t n);
 
 /* Temp scopes must end in reverse order of beginning, each exactly once;
@@ -174,19 +186,25 @@ void cu_arena_fail_at(CuArena *a, size_t n);
  * and a new one allocated. So a scope that is opened and filled again and
  * again reuses its memory instead of going back to malloc each time.
  * Releasing the arena frees the cached block too. */
+/** regions: opens scope(a) */
 CuTemp cu_temp_begin(CuArena *a);
+/** regions: closes scope(t) */
 void cu_temp_end(CuTemp t);
 /* The id of the innermost temp scope open on a or, with none open, of the
  * arena's base scope, which each release replaces. Never 0. */
+/** regions: borrows */
 size_t cu_arena_scope(const CuArena *a);
 
 /* Per-thread scratch arenas. Returns a scope on a scratch arena that is not
  * in conflicts[0..count). Pass every arena the caller will allocate results
  * into, or scratch_end can free those results. Aborts if all scratch arenas
  * conflict. */
+/** regions: opens scratch(conflicts, count) */
 CuTemp cu_scratch_begin(CuArena **conflicts, size_t count);
 /* The common case: one conflict, which may be NULL. */
+/** regions: opens scratch1(conflict) */
 CuTemp cu_scratch_begin1(CuArena *conflict);
+/** regions: closes scope(t) */
 void cu_scratch_end(CuTemp t);
 /* Frees this thread's scratch arenas. Call before a thread exits. */
 void cu_scratch_release(void);
@@ -203,13 +221,18 @@ typedef struct CuStr {
 #define CU_LIT(s) cu_str_n("" s "", sizeof("" s "") - 1)
 
 /* ptr may be NULL only when len is 0. */
+/** regions: returns view(ptr) */
 CuStr cu_str_n(const char *ptr, size_t len);
 /* NULL gives the empty string. */
+/** regions: returns view(s) */
 CuStr cu_str_cstr(const char *s);
+/** regions: returns static */
 CuStr cu_str_empty(void);
 
+/** regions: borrows */
 int cu_str_eq(CuStr a, CuStr b);
 /* Aborts when i >= s.len. */
+/** regions: borrows */
 char cu_str_at(CuStr s, size_t i);
 /* cu_str_at without a call when i is in bounds; out of bounds it calls
  * cu_str_at, which aborts. Evaluates s and i more than once, so pass
@@ -217,28 +240,38 @@ char cu_str_at(CuStr s, size_t i);
 #define CU_STR_AT_FAST(s, i) ((size_t)(i) < (s).len ? (s).ptr[(size_t)(i)] : cu_str_at((s), (i)))
 
 /* Slicing clamps to the string, so it never makes a view outside it. */
+/** regions: returns view(s) */
 CuStr cu_str_prefix(CuStr s, size_t n);
+/** regions: returns view(s) */
 CuStr cu_str_skip(CuStr s, size_t n);
 /* Bytes [start, end), with end clamped to len and start clamped to end. */
+/** regions: returns view(s) */
 CuStr cu_str_substr(CuStr s, size_t start, size_t end);
 /* Without leading and trailing ASCII whitespace. */
+/** regions: returns view(s) */
 CuStr cu_str_trim(CuStr s);
 
+/** regions: borrows */
 int cu_str_starts_with(CuStr s, CuStr prefix);
+/** regions: borrows */
 int cu_str_ends_with(CuStr s, CuStr suffix);
 /* Returns 1 and stores the first match's offset in *at, or returns 0 and
  * leaves *at unchanged. The empty needle matches at 0. Linear in s.len +
  * needle.len on any input: memchr and memcmp on ordinary text, switching to
  * Two-Way matching when candidates for the first byte come too often. */
+/** regions: borrows */
 int cu_str_find(CuStr s, CuStr needle, size_t *at);
 /* Splits around the first sep. If sep is absent, returns 0 with
  * *before = s and *after empty. */
+/** regions: writes *before view(s); writes *after view(s) */
 int cu_str_cut(CuStr s, CuStr sep, CuStr *before, CuStr *after);
 
 /* Copies into a. On failure returns the empty string and marks a failed, so
  * check cu_arena_failed when an empty result is possible. */
+/** regions: returns alloc(a) */
 CU_MUST_USE CuStr cu_str_copy(CuArena *a, CuStr s);
 /* NUL-terminated copy for C APIs. Returns NULL on failure. */
+/** regions: returns alloc(a) */
 CU_MUST_USE const char *cu_str_cstr_copy(CuArena *a, CuStr s);
 
 /* ASCII classification. Safe for any char value, including negative ones;
@@ -254,7 +287,9 @@ char cu_ascii_to_lower(char c);
  * spaces, no "0x". Returns 0 on empty input, a bad digit or overflow, and
  * leaves *out unchanged. cu_parse_long also accepts one leading '+' or '-'.
  * A base outside 2..36 aborts. */
+/** regions: borrows */
 CU_MUST_USE int cu_parse_ulong(CuStr s, unsigned base, unsigned long *out);
+/** regions: borrows */
 CU_MUST_USE int cu_parse_long(CuStr s, unsigned base, long *out);
 
 /* ---- String builder ---------------------------------------------------- */
@@ -271,18 +306,25 @@ typedef struct CuBuilder {
     int failed;
 } CuBuilder;
 
+/** regions: binds b to a */
 void cu_sb_init(CuBuilder *b, CuArena *a);
+/** regions: allocates in b */
 void cu_sb_str(CuBuilder *b, CuStr s);
+/** regions: allocates in b */
 void cu_sb_char(CuBuilder *b, char c);
+/** regions: allocates in b */
 void cu_sb_ulong(CuBuilder *b, unsigned long v);
+/** regions: allocates in b */
 void cu_sb_long(CuBuilder *b, long v);
 /* Lowercase hex, zero-padded to at least min_digits. */
+/** regions: allocates in b */
 void cu_sb_hex(CuBuilder *b, unsigned long v, size_t min_digits);
 /* Stores the built string in *out and returns 1, or stores the empty string
  * and returns 0 if any append failed. The view stays valid while the
  * builder keeps growing (until its scope ends or the arena is released):
  * a builder grows in place or into a new buffer, leaving the old bytes
  * where they were, so it can also append its own finished contents. */
+/** regions: writes *out view(*b) */
 CU_MUST_USE int cu_sb_finish(CuBuilder *b, CuStr *out);
 
 /* ---- Binary reading and writing ------------------------------------- */
@@ -293,20 +335,31 @@ CU_MUST_USE int cu_sb_finish(CuBuilder *b, CuStr *out);
  * or *pos > s.len, it returns 0 and leaves *pos and *out unchanged. Bytes
  * are assembled arithmetically, so input alignment and host byte order do
  * not matter. */
+/** regions: borrows */
 CU_MUST_USE int cu_rd_u8(CuStr s, size_t *pos, unsigned long *out);
+/** regions: borrows */
 CU_MUST_USE int cu_rd_u16le(CuStr s, size_t *pos, unsigned long *out);
+/** regions: borrows */
 CU_MUST_USE int cu_rd_u16be(CuStr s, size_t *pos, unsigned long *out);
+/** regions: borrows */
 CU_MUST_USE int cu_rd_u32le(CuStr s, size_t *pos, unsigned long *out);
+/** regions: borrows */
 CU_MUST_USE int cu_rd_u32be(CuStr s, size_t *pos, unsigned long *out);
 /* The next n bytes as a view into s, under the same rules. */
+/** regions: writes *out view(s) */
 CU_MUST_USE int cu_rd_bytes(CuStr s, size_t *pos, size_t n, CuStr *out);
 
 /* Append v in the given width and byte order. A v that does not fit the
  * width aborts. Failure is sticky, as for every builder append. */
+/** regions: allocates in b */
 void cu_sb_u8(CuBuilder *b, unsigned long v);
+/** regions: allocates in b */
 void cu_sb_u16le(CuBuilder *b, unsigned long v);
+/** regions: allocates in b */
 void cu_sb_u16be(CuBuilder *b, unsigned long v);
+/** regions: allocates in b */
 void cu_sb_u32le(CuBuilder *b, unsigned long v);
+/** regions: allocates in b */
 void cu_sb_u32be(CuBuilder *b, unsigned long v);
 
 /* ---- Growable array ---------------------------------------------------- */
@@ -357,19 +410,28 @@ typedef struct CuVec {
          : CU_VEC_AT((v), T, (i)))
 
 /* elem_size 0 aborts. */
+/** regions: binds v to a */
 void cu_vec_init(CuVec *v, CuArena *a, size_t elem_size);
 /* Room for at least extra more elements without moving. Returns 0 and marks
  * the vector failed on overflow or out of memory; once failed, returns 0
  * without allocating. */
+/** regions: allocates in v */
 int cu_vec_reserve(CuVec *v, size_t extra);
+/** regions: borrows */
 size_t cu_vec_len(const CuVec *v);
+/** regions: borrows */
 int cu_vec_failed(const CuVec *v);
 /* Sets len to 0 and keeps the storage. */
+/** regions: borrows */
 void cu_vec_clear(CuVec *v);
 
+/** regions: allocates in v; stores *elem in *v */
 void cu_vec_push_(CuVec *v, const void *elem, size_t elem_size);
+/** regions: writes *out view(*v) */
 int cu_vec_pop_(CuVec *v, void *out, size_t elem_size);
+/** regions: returns view(*v) */
 void *cu_vec_at_(const CuVec *v, size_t i, size_t elem_size);
+/** regions: returns view(*v) */
 void *cu_vec_data_(const CuVec *v, size_t elem_size);
 
 /* ---- Slices ------------------------------------------------------------ */
@@ -393,18 +455,24 @@ typedef struct CuSlice {
 /* Pointer to the first element, for loops over 0..len. Never NULL. */
 #define CU_SLICE_DATA(s, T) ((T *)cu_slice_data_((s), sizeof(T)))
 
+/** regions: returns view(*v) */
 CuSlice cu_vec_slice(const CuVec *v);
 /* Elements [start, end), with end clamped to len and start clamped to end,
  * so it never makes a view outside s. */
+/** regions: returns view(s) */
 CuSlice cu_slice_sub(CuSlice s, size_t start, size_t end);
 
+/** regions: returns view(p) */
 CuSlice cu_slice_n_(void *p, size_t n, size_t elem_size);
+/** regions: returns view(s) */
 void *cu_slice_at_(CuSlice s, size_t i, size_t elem_size);
+/** regions: returns view(s) */
 void *cu_slice_data_(CuSlice s, size_t elem_size);
 
 /* ---- Hash map ---------------------------------------------------------- */
 
 /* 32-bit FNV-1a of s's bytes. */
+/** regions: borrows */
 unsigned long cu_hash_fnv1a(CuStr s);
 
 /* A hash trie (Wellons' design) from CuStr keys to values of one type, in
@@ -453,13 +521,20 @@ typedef struct CuMapIter {
 #define CU_MAP_NEXT(it, T, key) ((T *)cu_map_next_((it), (key), sizeof(T)))
 
 /* value_size 0 aborts. */
+/** regions: binds m to a */
 void cu_map_init(CuMap *m, CuArena *a, size_t value_size);
+/** regions: borrows */
 size_t cu_map_len(const CuMap *m);
+/** regions: borrows */
 int cu_map_failed(const CuMap *m);
+/** regions: returns view(*m) */
 CuMapIter cu_map_iter(const CuMap *m);
 
+/** regions: allocates in m; stores *init in *m; returns view(*m) */
 void *cu_map_upsert_(CuMap *m, CuStr key, const void *init, size_t init_size, size_t value_size);
+/** regions: returns view(*m) */
 void *cu_map_get_(const CuMap *m, CuStr key, size_t value_size);
+/** regions: returns view(*it); writes *key view(*it) */
 void *cu_map_next_(CuMapIter *it, CuStr *key, size_t value_size);
 
 /* ---- Pool with generational handles ------------------------------------ */
@@ -505,18 +580,25 @@ typedef struct CuPool {
 #define CU_POOL_GET(p, T, h) ((T *)cu_pool_get_((p), (h), sizeof(T)))
 
 /* Generations up to the largest unsigned long. value_size 0 aborts. */
+/** regions: binds p to a */
 void cu_pool_init(CuPool *p, CuArena *a, size_t value_size);
 /* Generations up to max_gen, which must be at least 1. */
+/** regions: binds p to a */
 void cu_pool_init_with(CuPool *p, CuArena *a, size_t value_size, unsigned long max_gen);
 /* Removes h's object. Returns 0, changing nothing, if h is stale, null or
  * forged. */
+/** regions: borrows */
 int cu_pool_remove(CuPool *p, CuHandle h);
+/** regions: borrows */
 size_t cu_pool_len(const CuPool *p);
+/** regions: borrows */
 int cu_pool_failed(const CuPool *p);
 CuHandle cu_handle_null(void);
 int cu_handle_is_null(CuHandle h);
 
+/** regions: allocates in p; stores *v in *p */
 CU_MUST_USE CuHandle cu_pool_add_(CuPool *p, const void *v, size_t value_size);
+/** regions: returns view(*p) */
 void *cu_pool_get_(const CuPool *p, CuHandle h, size_t value_size);
 
 /* ---- Plex -------------------------------------------------------------- */
@@ -555,18 +637,24 @@ typedef struct CuPlex {
 /* Pointer to the node of kind that link names, or NULL. */
 #define CU_PLEX_GET(px, T, kind, link) ((T *)cu_plex_get_((px), (kind), (link), sizeof(T)))
 
+/** regions: binds px to a */
 void cu_plex_init(CuPlex *px, CuArena *a);
+/** regions: allocates in px */
 CU_MUST_USE unsigned cu_plex_kind(CuPlex *px, size_t node_size);
 /* Removes link's node. Returns 0, changing nothing, if link is null, stale
  * or names an unknown kind. */
+/** regions: borrows */
 int cu_plex_remove(CuPlex *px, CuLink link);
+/** regions: borrows */
 int cu_plex_failed(const CuPlex *px);
 CuLink cu_link_null(void);
 int cu_link_is_null(CuLink link);
 /* Whether a and b name the same node; a stale link still equals itself. */
 int cu_link_eq(CuLink a, CuLink b);
 
+/** regions: allocates in px; stores *v in *px */
 CU_MUST_USE CuLink cu_plex_add_(CuPlex *px, unsigned kind, const void *v, size_t node_size);
+/** regions: returns view(*px) */
 void *cu_plex_get_(const CuPlex *px, unsigned kind, CuLink link, size_t node_size);
 
 /* ---- Files: the platform module's first part ---------------------------
@@ -583,6 +671,7 @@ void *cu_plex_get_(const CuPlex *px, unsigned kind, CuLink link, size_t node_siz
  * arena push of its size plus one byte when the size can be found and
  * stays unchanged; a growing file is still read to its end. Empty files
  * need no allocation. */
+/** regions: writes *out alloc(a) */
 CU_MUST_USE int cu_file_read(CuArena *a, const char *path, CuStr *out);
 
 /* Reads f from its current position to EOF (standard input, a pipe).
@@ -591,6 +680,7 @@ CU_MUST_USE int cu_file_read(CuArena *a, const char *path, CuStr *out);
  * doubles as it fills, growing in place while it is the arena's newest
  * allocation (cu_arena_grow), so a read alone in its scope holds less than
  * twice its length. */
+/** regions: writes *out alloc(a) */
 CU_MUST_USE int cu_stream_read(CuArena *a, FILE *f, CuStr *out);
 
 /* Chunked, blocking input without seeks or arena allocations. A CuInput
@@ -611,7 +701,9 @@ typedef struct CuInput {
     int error;          /* saved stdio errno; zero is possible on error */
 } CuInput;
 
+/** regions: borrows */
 CU_MUST_USE int cu_input_open(CuInput *in, const char *path);
+/** regions: writes *in view(stream) */
 void cu_input_attach(CuInput *in, FILE *stream);
 /* cap must be positive. DATA publishes 1..cap bytes in caller-owned buf;
  * END and ERROR publish *n == 0. A failed read may consume bytes and change
@@ -621,11 +713,14 @@ void cu_input_attach(CuInput *in, FILE *stream);
  * clears the borrowed stream's flags. Reads after successful close abort.
  * Each call goes through stdio, so it runs at read(2) speed only with
  * chunks of 64 KiB or more; smaller chunks cost measurably more per byte. */
+/** regions: borrows */
 CU_MUST_USE CuInputStatus cu_input_read(CuInput *in, void *buf, size_t cap, size_t *n);
 /* Closes an owned stream or detaches a borrowed one. Idempotent: returns
  * the same aggregate status on repeats, 0 for any prior or close error,
  * preserving the first saved errno even when zero. No stream is retained. */
+/** regions: borrows */
 CU_MUST_USE int cu_input_close(CuInput *in);
+/** regions: borrows */
 int cu_input_errno(const CuInput *in);
 
 #endif
