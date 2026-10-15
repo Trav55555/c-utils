@@ -41,9 +41,18 @@ static char *pattern(size_t n)
     return p;
 }
 
+/* Cerberus models every byte as an object: a 200000-byte file read runs
+ * past dcheck's 300 s semantics limit, and a 70000-byte stream read needs
+ * more than 3 GiB. Under it the sizes stop at the 4096 boundary, which still
+ * reads past the first buffer and grows a stream once; native runs keep
+ * the large sizes. */
 static void test_read_file(int debug)
 {
+#ifdef __cerb__
+    static const size_t sizes[] = {0, 1, 4095, 4096, 4097};
+#else
     static const size_t sizes[] = {0, 1, 4095, 4096, 4097, 200000};
+#endif
     char path[512];
     CuArena a;
     CuStr s;
@@ -120,8 +129,13 @@ static void test_directory(void)
  * a file opened here: WASI has no tmpfile.) */
 static void test_read_stream(int debug)
 {
+#ifdef __cerb__
+    static const size_t sizes[] = {0, 5, 4096, 4097};
+    static const size_t allocations[] = {1, 1, 2, 2};
+#else
     static const size_t sizes[] = {0, 5, 4096, 4097, 70000};
     static const size_t allocations[] = {1, 1, 2, 2, 6};
+#endif
     char path[512];
     CuArena a;
     CuStr s;
@@ -152,7 +166,7 @@ static void test_read_stream(int debug)
      * capacity, which doubling keeps under twice the length. */
     f = fopen(path, "rb");
     assert(f != NULL);
-    assert(cu_stream_read(&a, f, &s) && s.len == 70000);
+    assert(cu_stream_read(&a, f, &s) && s.len == sizes[sizeof sizes / sizeof sizes[0] - 1]);
     assert(fclose(f) == 0);
     assert(a.held < 2 * s.len + 1024);
     cu_arena_release(&a);
