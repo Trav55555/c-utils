@@ -19,10 +19,11 @@ static void check_size(const CuVec *v, size_t elem_size)
 }
 
 /* Growing under any scope but the vector's own could leave it pointing at
- * memory that scope's end frees. */
+ * memory that scope's end frees. The field is read directly: this runs on
+ * every push. */
 static void check_scope(const CuVec *v)
 {
-    if (cu_arena_scope(v->arena) != v->scope)
+    if (v->arena->scope != v->scope)
         abort();
 }
 
@@ -43,6 +44,7 @@ int cu_vec_reserve(CuVec *v, size_t extra)
 {
     size_t need;
     size_t cap;
+    size_t bytes;
     char *data;
 
     if (v == NULL)
@@ -63,13 +65,17 @@ int cu_vec_reserve(CuVec *v, size_t extra)
             break;
         }
     }
-    data = (char *)cu_arena_push(v->arena, cap, v->elem_size);
+    if (!cu_size_mul(cap, v->elem_size, &bytes)) {
+        v->arena->failed = 1;
+        v->failed = 1;
+        return 0;
+    }
+    /* v->cap * elem_size was checked when the storage was made. */
+    data = (char *)cu_arena_grow(v->arena, v->data, v->cap * v->elem_size, bytes);
     if (data == NULL) {
         v->failed = 1;
         return 0;
     }
-    if (v->len != 0)
-        memcpy(data, v->data, v->len * v->elem_size);
     v->data = data;
     v->cap = cap;
     return 1;
@@ -96,14 +102,58 @@ void cu_vec_clear(CuVec *v)
     v->len = 0;
 }
 
+/* Where elem starts in the vector's bytes, or (size_t)-1 if it is not in
+ * them. Equality is the only comparison defined between pointers that may
+ * point into different objects, so each byte is tried. Growth already
+ * costs a pass over the elements, so this keeps pushes amortised O(1). */
+static size_t offset_in(const CuVec *v, const char *elem)
+{
+    size_t k;
+    size_t n;
+
+    n = v->len * v->elem_size;
+    for (k = 0; k < n; k++) {
+        if (elem == v->data + k)
+            return k;
+    }
+    return (size_t)-1;
+}
+
+/* A push into a full vector. Growth may free the old buffer (cu_arena_grow
+ * reallocates), and elem may point into it: a small element is copied
+ * aside first, a large one is found again by its offset. */
+static void push_growing(CuVec *v, const char *elem)
+{
+    char aside[64];
+    size_t off;
+
+    off = (size_t)-1;
+    if (v->elem_size <= sizeof aside) {
+        memcpy(aside, elem, v->elem_size);
+        elem = aside;
+    } else {
+        off = offset_in(v, elem);
+    }
+    if (!cu_vec_reserve(v, 1))
+        return;
+    if (off != (size_t)-1)
+        elem = v->data + off;
+    memcpy(v->data + v->len * v->elem_size, elem, v->elem_size);
+    v->len++;
+}
+
 void cu_vec_push_(CuVec *v, const void *elem, size_t elem_size)
 {
     check_size(v, elem_size);
     if (elem == NULL)
         abort();
     check_scope(v);
-    if (!cu_vec_reserve(v, 1))
+    if (v->failed)
         return;
+    if (v->len == v->cap) {
+        push_growing(v, (const char *)elem);
+        return;
+    }
     memcpy(v->data + v->len * v->elem_size, elem, v->elem_size);
     v->len++;
 }

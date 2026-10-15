@@ -15,80 +15,73 @@ static const unsigned char *take(CuStr s, size_t *pos, size_t n)
     return p;
 }
 
-/* Each byte is widened to unsigned long before shifting: as an unsigned
- * char it would promote to int, where 0xFF << 24 overflows. */
-static unsigned long le(const unsigned char *p, size_t n)
+/* take() for a reader that stores an integer in *out. */
+static const unsigned char *take_int(CuStr s, size_t *pos, size_t n, const unsigned long *out)
 {
-    unsigned long v;
-
-    v = 0;
-    while (n > 0) {
-        n--;
-        v = (v << 8) | (unsigned long)p[n];
-    }
-    return v;
-}
-
-static unsigned long be(const unsigned char *p, size_t n)
-{
-    unsigned long v;
-    size_t i;
-
-    v = 0;
-    for (i = 0; i < n; i++)
-        v = (v << 8) | (unsigned long)p[i];
-    return v;
-}
-
-static int read_le(CuStr s, size_t *pos, size_t n, unsigned long *out)
-{
-    const unsigned char *p;
-
     if (out == NULL)
         abort();
-    p = take(s, pos, n);
-    if (p == NULL)
-        return 0;
-    *out = le(p, n);
-    return 1;
+    return take(s, pos, n);
 }
 
-static int read_be(CuStr s, size_t *pos, size_t n, unsigned long *out)
-{
-    const unsigned char *p;
-
-    if (out == NULL)
-        abort();
-    p = take(s, pos, n);
-    if (p == NULL)
-        return 0;
-    *out = be(p, n);
-    return 1;
-}
-
+/* Each reader assembles its width with one expression, which compilers turn
+ * into a single load where the host allows. Each byte is widened to
+ * unsigned long before shifting: as an unsigned char it would promote to
+ * int, where 0xFF << 24 overflows. */
 int cu_rd_u8(CuStr s, size_t *pos, unsigned long *out)
 {
-    return read_le(s, pos, 1, out);
+    const unsigned char *p;
+
+    p = take_int(s, pos, 1, out);
+    if (p == NULL)
+        return 0;
+    *out = (unsigned long)p[0];
+    return 1;
 }
 
 int cu_rd_u16le(CuStr s, size_t *pos, unsigned long *out)
 {
-    return read_le(s, pos, 2, out);
+    const unsigned char *p;
+
+    p = take_int(s, pos, 2, out);
+    if (p == NULL)
+        return 0;
+    *out = (unsigned long)p[0] | (unsigned long)p[1] << 8;
+    return 1;
 }
 
 int cu_rd_u16be(CuStr s, size_t *pos, unsigned long *out)
 {
-    return read_be(s, pos, 2, out);
+    const unsigned char *p;
+
+    p = take_int(s, pos, 2, out);
+    if (p == NULL)
+        return 0;
+    *out = (unsigned long)p[0] << 8 | (unsigned long)p[1];
+    return 1;
 }
 
 int cu_rd_u32le(CuStr s, size_t *pos, unsigned long *out)
 {
-    return read_le(s, pos, 4, out);
+    const unsigned char *p;
+
+    p = take_int(s, pos, 4, out);
+    if (p == NULL)
+        return 0;
+    *out = (unsigned long)p[0] | (unsigned long)p[1] << 8 | (unsigned long)p[2] << 16 |
+           (unsigned long)p[3] << 24;
+    return 1;
 }
 
 int cu_rd_u32be(CuStr s, size_t *pos, unsigned long *out)
 {
-    return read_be(s, pos, 4, out);
+    const unsigned char *p;
+
+    p = take_int(s, pos, 4, out);
+    if (p == NULL)
+        return 0;
+    *out = (unsigned long)p[0] << 24 | (unsigned long)p[1] << 16 | (unsigned long)p[2] << 8 |
+           (unsigned long)p[3];
+    return 1;
 }
 
 int cu_rd_bytes(CuStr s, size_t *pos, size_t n, CuStr *out)

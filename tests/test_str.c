@@ -28,6 +28,17 @@ static void test_eq_and_at(void)
     assert(cu_str_at(CU_LIT("xyz"), 2) == 'z');
 }
 
+/* The header fast path reads what cu_str_at reads. */
+static void test_at_fast(void)
+{
+    CuStr s;
+    size_t i;
+
+    s = CU_LIT("hello");
+    for (i = 0; i < s.len; i++)
+        assert(CU_STR_AT_FAST(s, i) == cu_str_at(s, i));
+}
+
 static void test_slicing_clamps(void)
 {
     CuStr s;
@@ -65,6 +76,96 @@ static void test_prefix_suffix_find(void)
     assert(!cu_str_find(s, CU_LIT("vx"), &at) && at == 77);
     assert(!cu_str_find(CU_LIT("ab"), CU_LIT("abc"), &at));
     assert(cu_str_find(CU_LIT("aab"), CU_LIT("ab"), &at) && at == 1);
+}
+
+/* The first match by brute force, or (size_t)-1. */
+static size_t naive_find(const char *s, size_t n, const char *needle, size_t m)
+{
+    size_t i;
+
+    for (i = 0; m <= n && i <= n - m; i++) {
+        if (memcmp(s + i, needle, m) == 0)
+            return i;
+    }
+    return (size_t)-1;
+}
+
+/* cu_str_find agrees with brute force on one case. */
+static void hay_case(const char *hay, const char *needle)
+{
+    size_t want;
+    size_t at;
+    int found;
+
+    want = naive_find(hay, strlen(hay), needle, strlen(needle));
+    at = 7;
+    found = cu_str_find(cu_str_cstr(hay), cu_str_cstr(needle), &at);
+    assert(found == (want != (size_t)-1));
+    assert(found ? at == want : at == 7);
+}
+
+static unsigned long rng_state = 12345;
+
+static unsigned rng(unsigned n)
+{
+    rng_state = (rng_state * 1103515245UL + 12345UL) & 0x7FFFFFFFUL;
+    return (unsigned)((rng_state >> 8) % n);
+}
+
+/* Haystacks that start with a long run of the needle's first byte, or of
+ * its first few bytes, make nearly every position a candidate: enough to
+ * switch to the linear-time search, which then must agree with brute
+ * force over the rest, for needles periodic or not. */
+static void test_find_on_adversarial_input(void)
+{
+    static const char alphabet[] = "aab";
+    char hay[256];
+    char needle[24];
+    size_t n;
+    size_t m;
+    size_t k;
+    size_t run;
+    size_t want;
+    size_t at;
+    int found;
+    int round;
+
+    for (round = 0; round < 80; round++) {
+        m = 9 + rng(14);
+        needle[0] = 'a';
+        for (k = 1; k < m; k++)
+            needle[k] = alphabet[rng(round % 3 == 0 ? 3 : 2)];
+        if (round % 5 == 0) {
+            run = 1 + rng(3);
+            for (k = run; k < m; k++)
+                needle[k] = needle[k % run];
+            if (m > 2 && rng(2))
+                needle[m - 1 - rng(2)] = 'c';
+        }
+        run = 40 + rng(120);
+        n = run + rng(60);
+        for (k = 0; k < run; k++)
+            hay[k] = round % 2 ? 'a' : needle[k % (1 + rng(2))];
+        for (k = run; k < n; k++)
+            hay[k] = alphabet[rng(3)];
+        if (rng(2) && n + m <= sizeof hay) {
+            k = run - rng(20);
+            memcpy(hay + k, needle, m);
+            if (k + m > n)
+                n = k + m;
+        }
+        want = naive_find(hay, n, needle, m);
+        at = 7;
+        found = cu_str_find(cu_str_n(hay, n), cu_str_n(needle, m), &at);
+        assert(found == (want != (size_t)-1));
+        assert(found ? at == want : at == 7);
+    }
+    /* A periodic needle whose right part matches where its left part does
+     * not, so the search shifts by the period. */
+    hay_case("aaaaaaaaaaaaaaaaaaaaaaabbabaaaaabaaaaabaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+             "aaaaabaaaaa");
+    /* The last candidate fails: the loop ends without memchr failing. */
+    hay_case("ab", "ac");
 }
 
 static void test_cut(void)
@@ -133,6 +234,20 @@ static void test_copy_failure(int debug)
 }
 
 #ifdef CU_DEATH_TESTS
+static void at_past_end(void)
+{
+    assert(cu_str_at(CU_LIT("ab"), 2) == 0);
+}
+
+/* Out of bounds, the fast path falls back to cu_str_at, which aborts. */
+static void at_fast_past_end(void)
+{
+    CuStr s;
+
+    s = CU_LIT("ab");
+    assert(CU_STR_AT_FAST(s, 2) == 0);
+}
+
 static void find_null_at(void)
 {
     assert(cu_str_find(CU_LIT("ab"), CU_LIT("b"), NULL));
@@ -182,6 +297,8 @@ static void cstr_copy_null_arena_overflow(void)
 
 static void death_tests(void)
 {
+    expect_abort(at_past_end);
+    expect_abort(at_fast_past_end);
     expect_abort(find_null_at);
     expect_abort(find_empty_null_at);
     expect_abort(cut_null_before);
@@ -196,8 +313,10 @@ int main(void)
 {
     test_construct();
     test_eq_and_at();
+    test_at_fast();
     test_slicing_clamps();
     test_prefix_suffix_find();
+    test_find_on_adversarial_input();
     test_cut();
     test_trim_and_ascii();
     test_copy(0);

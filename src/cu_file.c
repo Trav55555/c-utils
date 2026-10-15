@@ -1,15 +1,16 @@
 #include <errno.h>
 #include <stdlib.h>
-#include <string.h>
 #include "cu.h"
 
 /* Reads f to its end into a buffer of cap bytes, growing it by doubling
- * when it fills; each growth abandons the old buffer in the arena, so cap
- * should be a good guess. 0 on a read error or when memory runs out. */
+ * when it fills. Growth reuses the buffer's memory while it is the arena's
+ * newest allocation; otherwise it abandons the old buffer in the arena, so
+ * cap should be a good guess. 0 on a read error or when memory runs out. */
 static int read_all(CuArena *a, FILE *f, size_t cap, CuStr *out)
 {
     char *buf;
     char *bigger;
+    size_t bigger_cap;
     size_t len;
     size_t got;
 
@@ -25,15 +26,15 @@ static int read_all(CuArena *a, FILE *f, size_t cap, CuStr *out)
                 return 0;
             break;
         }
-        if (!cu_size_mul(cap, 2, &cap)) {
+        if (!cu_size_mul(cap, 2, &bigger_cap)) {
             a->failed = 1;
             return 0;
         }
-        bigger = cu_arena_push_bytes(a, cap);
+        bigger = (char *)cu_arena_grow(a, buf, cap, bigger_cap);
         if (bigger == NULL)
             return 0;
-        memcpy(bigger, buf, len);
         buf = bigger;
+        cap = bigger_cap;
     }
     *out = cu_str_n(buf, len);
     return 1;

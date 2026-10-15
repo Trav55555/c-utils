@@ -150,6 +150,62 @@ static void test_iterates_in_insertion_order(CuArena *a)
     assert(CU_MAP_NEXT(&it, long, &key) == NULL);
 }
 
+/* Each entry is one allocation (debug mode counts them), and its value is
+ * aligned for any type whatever the key lengths before it. */
+static void test_one_allocation_per_entry(void)
+{
+    CuArena a;
+    CuMap m;
+    char key[8];
+    double init;
+    double *v;
+    size_t i;
+    size_t attempts;
+
+    cu_arena_init_with(&a, 64, 1);
+    CU_MAP_INIT(&m, &a, double);
+    init = 0.5;
+    for (i = 0; i < 7; i++) {
+        memset(key, 'k', i + 1);
+        attempts = a.attempts;
+        v = CU_MAP_UPSERT(&m, double, cu_str_n(key, i + 1), &init);
+        assert(v != NULL && a.attempts == attempts + 1);
+        assert((size_t)v % sizeof(double) == 0 && (size_t)v % sizeof(void *) == 0);
+        *v = (double)i;
+    }
+    cu_arena_release(&a);
+
+    cu_arena_init_with(&a, 4096, 0);
+    CU_MAP_INIT(&m, &a, double);
+    for (i = 0; i < 7; i++) {
+        memset(key, 'k', i + 1);
+        v = CU_MAP_UPSERT(&m, double, cu_str_n(key, i + 1), &init);
+        assert(v != NULL && (size_t)v % sizeof(double) == 0 && (size_t)v % sizeof(void *) == 0);
+    }
+    assert(*CU_MAP_GET(&m, double, CU_LIT("kkk")) > 0.25);
+    cu_arena_release(&a);
+}
+
+/* An entry whose size overflows fails like any allocation: the map and the
+ * arena are marked, and init is never read. */
+static void test_entry_size_overflow_fails(void)
+{
+    CuArena a;
+    CuMap m;
+    long init;
+    size_t huge;
+
+    /* Shifts, not (size_t)-1 - 15: Cerberus (git-b3e11ea) truncates that
+     * subtraction to 32 bits, which would make this value small. */
+    huge = (size_t)-1 >> 4 << 4;
+    cu_arena_init_with(&a, 64, 0);
+    cu_map_init(&m, &a, huge);
+    init = 1;
+    assert(cu_map_upsert_(&m, CU_LIT("k"), &init, huge, huge) == NULL);
+    assert(cu_map_failed(&m) && cu_arena_failed(&a) && cu_map_len(&m) == 0);
+    cu_arena_release(&a);
+}
+
 /* Run n fails allocation n alone, so each allocation fails in turn while
  * the ones after it succeed; the runs end when one makes no more than n
  * allocations, and only that run may succeed. */
@@ -334,6 +390,8 @@ int main(void)
     test_iterates_in_insertion_order(&a);
     test_upsert_fails_at_every_allocation(0);
     test_upsert_fails_at_every_allocation(1);
+    test_one_allocation_per_entry();
+    test_entry_size_overflow_fails();
     cu_arena_release(&a);
 #ifdef CU_DEATH_TESTS
     death_tests();

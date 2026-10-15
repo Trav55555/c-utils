@@ -89,10 +89,129 @@ int cu_str_ends_with(CuStr s, CuStr suffix)
            memcmp(s.ptr + (s.len - suffix.len), suffix.ptr, suffix.len) == 0;
 }
 
+/* The maximal suffix of x[0..m) under the byte order, or under the
+ * reverse order when reverse is set: returns where it starts and stores
+ * its period in *period (Crochemore and Perrin). Positions are kept one
+ * higher than in the published form, so nothing wraps below 0. */
+static size_t maximal_suffix(const unsigned char *x, size_t m, int reverse, size_t *period)
+{
+    size_t ms; /* start of the suffix so far, plus one */
+    size_t j;
+    size_t k;
+    size_t p;
+    unsigned char a;
+    unsigned char b;
+
+    ms = 0;
+    j = 0;
+    k = 1;
+    p = 1;
+    while (j + k < m) {
+        a = x[j + k];
+        b = x[ms - 1 + k];
+        if (a == b) {
+            if (k != p) {
+                k++;
+            } else {
+                j += p;
+                k = 1;
+            }
+        } else if ((a < b) != (reverse != 0)) {
+            j += k;
+            k = 1;
+            p = j + 1 - ms;
+        } else {
+            ms = j + 1;
+            j++;
+            k = 1;
+            p = 1;
+        }
+    }
+    *period = p;
+    return ms;
+}
+
+/* Two-Way string matching (Crochemore and Perrin, 1991): the first match
+ * of x[0..m) in y[0..n) at or after start, in O(n + m) time and O(1)
+ * memory, whatever the bytes. Needs 2 <= m <= n. Returns 1 and stores the
+ * offset in *at, or returns 0. */
+static int two_way(const unsigned char *y, size_t n, const unsigned char *x, size_t m, size_t start,
+                   size_t *at)
+{
+    size_t suffix;
+    size_t period;
+    size_t rev;
+    size_t rev_period;
+    size_t memory;
+    size_t i;
+    size_t j;
+
+    /* The critical factorization x = x[0..suffix) x[suffix..m). period is
+     * the period of the right part, so suffix + period <= m. */
+    suffix = maximal_suffix(x, m, 0, &period);
+    rev = maximal_suffix(x, m, 1, &rev_period);
+    if (rev >= suffix) {
+        suffix = rev;
+        period = rev_period;
+    }
+    j = start;
+    if (memcmp(x, x + period, suffix) == 0) {
+        /* x is periodic: after a shift by the period, the bytes before
+         * memory are known to match and are not compared again. */
+        memory = 0;
+        while (j <= n - m) {
+            i = suffix > memory ? suffix : memory;
+            while (i < m && x[i] == y[i + j])
+                i++;
+            if (i < m) {
+                j += i - suffix + 1;
+                memory = 0;
+                continue;
+            }
+            i = suffix;
+            while (i > memory && x[i - 1] == y[i - 1 + j])
+                i--;
+            if (i <= memory) {
+                *at = j;
+                return 1;
+            }
+            j += period;
+            memory = m - period;
+        }
+    } else {
+        /* Otherwise a mismatch on the left part allows a shift past it. */
+        period = (suffix > m - suffix ? suffix : m - suffix) + 1;
+        while (j <= n - m) {
+            i = suffix;
+            while (i < m && x[i] == y[i + j])
+                i++;
+            if (i < m) {
+                j += i - suffix + 1;
+                continue;
+            }
+            i = suffix;
+            while (i > 0 && x[i - 1] == y[i - 1 + j])
+                i--;
+            if (i == 0) {
+                *at = j;
+                return 1;
+            }
+            j += period;
+        }
+    }
+    return 0;
+}
+
+/* memchr for the needle's first byte, then memcmp: fast on ordinary text.
+ * Each candidate costs at most needle.len compares, so when candidates
+ * come too often (cand / 8 > i / needle.len, about cand * needle.len >
+ * 8 * i) the rest of the search switches to Two-Way, keeping the whole
+ * search linear on any input. */
 int cu_str_find(CuStr s, CuStr needle, size_t *at)
 {
     size_t i;
     size_t last;
+    size_t cand;
     const char *hit;
 
     if (at == NULL)
@@ -105,6 +224,7 @@ int cu_str_find(CuStr s, CuStr needle, size_t *at)
         return 0;
     last = s.len - needle.len;
     i = 0;
+    cand = 0;
     while (i <= last) {
         hit = (const char *)memchr(s.ptr + i, needle.ptr[0], last - i + 1);
         if (hit == NULL)
@@ -115,6 +235,10 @@ int cu_str_find(CuStr s, CuStr needle, size_t *at)
             return 1;
         }
         i++;
+        cand++;
+        if (cand > 16 && cand / 8 > i / needle.len)
+            return two_way((const unsigned char *)s.ptr, s.len, (const unsigned char *)needle.ptr,
+                           needle.len, i, at);
     }
     return 0;
 }

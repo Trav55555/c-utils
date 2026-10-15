@@ -55,6 +55,16 @@ With `CU_ARENA_DEBUG` defined, or when built with AddressSanitizer, every push i
 
 Containers (`CuBuilder`, `CuVec`, `CuMap`, `CuPool`, `CuPlex`) keep their memory in their arena and remember the temp scope that was innermost when they were initialised. Any mutating call (append, push, reserve, upsert, add) under another scope aborts, because ending that scope would free the container's memory under it. Reading is allowed under newer scopes while the container's own scope is open. To build something inside a scope, initialise the container inside it too. Growing a container after its arena is released aborts too. Re-initialising an arena that still has containers is not detected.
 
+## Growth and speed
+
+`CuVec` and `cu_stream_read` grow through `cu_arena_grow`: when the buffer is the arena's newest allocation it extends into the rest of its block, or reallocates a block it has to itself (made inside the innermost temp scope), so nothing is left behind. A buffer that something else was pushed after moves and leaves its old copy in the arena. A reallocation frees the old buffer, as `realloc` does; `CuVec` already invalidates element pointers on every push, and pushing one of its own elements is handled. Memory from before the innermost temp scope is never grown in place, so a scope's end still frees exactly what was pushed in it.
+
+`CuBuilder` never reallocates: it grows in place within its block (`cu_arena_extend`) or moves to a new buffer and leaves the old bytes where they were. Views from `cu_sb_finish` therefore stay valid while the builder keeps growing, and a builder can append its own contents. The cost is that a builder past its block holds about twice its capacity, as before.
+
+Ending a temp scope keeps its largest block for the arena's next block (except in debug mode), so a scope that is filled and ended in a loop does not go back to `malloc` each time. `a.cached` counts that block; `a.held` counts live blocks only, and the limit caps the two together.
+
+`CU_STR_AT_FAST`, `CU_VEC_AT_FAST` and `CU_VEC_PUSH_FAST` do the common case in the header, after every check the function would make, and call the function otherwise. They evaluate their arguments more than once. Every other call crosses translation units, so build with `-flto` (or `-O2 -flto` like `dcheck`'s release check) to let the compiler inline the library into hot loops; there is no unity build file, because consumers compile `src/*.c` directly.
+
 ## Typed access
 
 Containers and slices store values as bytes and hand them back as `void *`. Each typed macro (`CU_VEC_AT`, `CU_SLICE_AT`, `CU_MAP_GET`, `CU_POOL_GET`, `CU_PLEX_GET` and the rest) passes `sizeof` its type, and the call aborts if that differs from the size the container was initialised with. A type of a different size is therefore caught on every call, but a different type of the same size (`int` for `float`, or two structs that happen to match) is not: the size is the only type information that survives. `CuPlex` adds a kind number to each link, so links are checked by kind as well as size. Code held to MISRA-style rules should still treat each conversion from `void *` as a deviation to justify.
@@ -70,8 +80,9 @@ alone. The view lives until its arena scope ends.
 
 The file size is an allocation hint. If it cannot be queried, the reader
 rewinds and grows the buffer as needed. Streams also grow by doubling,
-leaving old buffers in the arena until release. Use the arena byte limit
-when reading untrusted input.
+in place while the buffer is the arena's newest allocation; a buffer that
+has to move leaves its old copy in the arena until the scope ends. Use the
+arena byte limit when reading untrusted input.
 
 `CuInput` provides chunked input without seeks or arena allocations. Open
 an owned file with `cu_input_open`, or borrow an existing `FILE` at its

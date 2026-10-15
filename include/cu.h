@@ -33,6 +33,7 @@
 
 #include <stddef.h>
 #include <stdio.h>
+#include <string.h>
 
 #if defined(__GNUC__) && !defined(__TINYC__)
 #define CU_MUST_USE __attribute__((warn_unused_result))
@@ -58,13 +59,17 @@ typedef struct CuArena {
     int failed;        /* sticky: some push failed */
     size_t blocks;     /* blocks ever made; numbers the next one, never reset */
     size_t held;       /* bytes in live blocks, headers included */
-    size_t limit;      /* most bytes held may reach; (size_t)-1: no limit */
+    size_t limit;      /* most bytes held + cached may reach; (size_t)-1: none */
     size_t refused;    /* bytes of the last block the limit refused, or 0 */
     size_t attempts;   /* block allocations tried, failed ones included;
                         * never reset */
     size_t fail_at;    /* the attempt that fails; (size_t)-1: none */
     size_t scope;      /* innermost open temp scope's id, else the base's */
     size_t scopes;     /* scope ids ever issued; numbers the next one */
+    size_t mark_block; /* where the innermost open temp scope began: the */
+    size_t mark_used;  /* newest block's number (0: none) and bytes used */
+    CuBlock *cache;    /* a block freed by a scope's end, kept for reuse */
+    size_t cached;     /* its bytes, header included, or 0; not in held */
 } CuArena;
 
 /* A position in an arena. Ending it frees everything pushed since. The block
@@ -77,6 +82,8 @@ typedef struct CuTemp {
     size_t id;     /* never 0; repeats only after size_t wraps, or after
                     * the arena is re-initialised */
     size_t parent; /* the scope that was innermost when this one began */
+    size_t parent_block; /* that scope's mark, restored when this one ends */
+    size_t parent_used;
 } CuTemp;
 
 /* Default block size 64 KiB. Debug mode is on by default when built with
@@ -84,9 +91,9 @@ typedef struct CuTemp {
 void cu_arena_init(CuArena *a);
 void cu_arena_init_with(CuArena *a, size_t block_size, int debug);
 
-/* Frees every block. The arena can be pushed to again afterwards, but
- * temp scopes and containers from before the release are dead: ending or
- * growing one aborts. */
+/* Frees every block, the cached one included. The arena can be pushed to
+ * again afterwards, but temp scopes and containers from before the release
+ * are dead: ending or growing one aborts. */
 void cu_arena_release(CuArena *a);
 
 /* Uninitialised memory for count elements of elem_size bytes, aligned for any
@@ -99,30 +106,74 @@ CU_MUST_USE char *cu_arena_push_bytes(CuArena *a, size_t n);
 
 #define CU_PUSH(a, T, n) ((T *)cu_arena_push((a), (n), sizeof(T)))
 
+/* Grows p, an allocation of old_size bytes from a, to new_size bytes and
+ * returns where it now is; its first old_size bytes are kept. p may be NULL
+ * only when old_size is 0, and then this is cu_arena_push(a, new_size, 1).
+ * A new_size of at most old_size returns p unchanged.
+ *
+ * When p is the newest allocation, was pushed under the innermost temp scope
+ * (or with none open), and new_size fits in the rest of its block, p grows
+ * in place: no block allocation, held unchanged. When p is all there is in
+ * the newest block (it starts at the block's beginning) and that block was
+ * made under the innermost scope, the block is reallocated to fit: one block allocation attempt (cu_arena_fail_at),
+ * held grows by the bytes added, the limit applies to those bytes, and a
+ * refusal records them in refused. Otherwise this is cu_arena_push(a,
+ * new_size, 1) and a copy, and p's old bytes stay held until their scope
+ * ends or the arena is released.
+ *
+ * A successful call may free p's old memory, as realloc does: p, every
+ * pointer into its bytes, and any zero-size allocation at p's address are
+ * invalid unless p is returned, so copy anything still needed from them
+ * first. Pointers to other allocations are unaffected. On failure it
+ * returns NULL, marks the arena failed, and p keeps its bytes. Memory from
+ * before the innermost temp scope is never grown in place or reallocated
+ * (nor is the block that scope began in), so ending the scope frees exactly
+ * what was pushed in it. old_size 0 always gets a new push. */
+CU_MUST_USE void *cu_arena_grow(CuArena *a, void *p, size_t old_size, size_t new_size);
+
+/* Grows p (old_size bytes from a, not NULL) to new_size bytes in place, as
+ * cu_arena_grow does in its first case, and returns 1; or returns 0,
+ * changing nothing, when that is not possible. It never allocates, moves
+ * or frees. A new_size of at most old_size returns 1; old_size 0 returns
+ * 0. CuBuilder grows this way or with a new push, never by realloc. */
+CU_MUST_USE int cu_arena_extend(CuArena *a, void *p, size_t old_size, size_t new_size);
+
 int cu_arena_failed(const CuArena *a);
 
-/* Caps the bytes the arena's blocks may hold, headers included. A push that
- * would pass the cap fails exactly as if memory ran out, and records the
- * block's size in refused: held + refused is the smallest cap under which
- * that push succeeds. Releasing the arena or ending a temp scope frees bytes
- * for later pushes. The default, (size_t)-1, means no cap. Use it to bound
- * memory spent on untrusted input, and in tests to make each allocation
- * fail in turn. */
+/* Caps the bytes the arena's blocks may hold, headers included, the cached
+ * block (see cu_temp_end) counted too: held + cached never passes it. A
+ * push that would pass the cap fails exactly as if memory ran out, and
+ * records the block's size in refused: held + refused is the smallest cap
+ * under which that push succeeds, since the cached block is dropped before
+ * a new block is allocated. Releasing the arena or ending a temp scope
+ * frees bytes for later pushes. A cap below held + cached drops the cached
+ * block. The default, (size_t)-1, means no cap. Use it to bound memory
+ * spent on untrusted input, and in tests to make each allocation fail in
+ * turn. */
 void cu_arena_set_limit(CuArena *a, size_t max_bytes);
 
 /* Test hook: the block allocation numbered n (counting attempts from 0 in
  * a.attempts) fails exactly as if memory ran out, and every other one
- * succeeds. Only a push that needs a new block is an attempt; in debug
- * mode that is every push. Tests step n from 0 until a run makes no more
- * than n attempts, so each allocation fails alone; a cap would also fail
- * the allocations after it, which can hide a failure the code ignores.
- * (size_t)-1, the default, fails none. */
+ * succeeds. Only a push that needs a new block, or a cu_arena_grow that
+ * reallocates one, is an attempt; in debug mode every push is. Tests step
+ * n from 0 until a run makes no more than n attempts, so each allocation
+ * fails alone; a cap would also fail the allocations after it, which can
+ * hide a failure the code ignores. (size_t)-1, the default, fails none. */
 void cu_arena_fail_at(CuArena *a, size_t n);
 
 /* Temp scopes must end in reverse order of beginning, each exactly once;
  * ending any scope but the innermost one aborts. Releasing the arena discards
  * its open scopes, so ending one afterwards aborts too. Pointers pushed
- * inside a scope are invalid after it ends. */
+ * inside a scope are invalid after it ends.
+ *
+ * Ending a scope frees the blocks made in it, except that the largest is
+ * kept as the arena's cached block, replacing a smaller one, when not in
+ * debug mode. The next push that needs a new block takes the cached block
+ * if it is big enough (it counts as an attempt for cu_arena_fail_at, and
+ * its bytes move from cached to held); otherwise the cached block is freed
+ * and a new one allocated. So a scope that is opened and filled again and
+ * again reuses its memory instead of going back to malloc each time.
+ * Releasing the arena frees the cached block too. */
 CuTemp cu_temp_begin(CuArena *a);
 void cu_temp_end(CuTemp t);
 /* The id of the innermost temp scope open on a or, with none open, of the
@@ -160,6 +211,10 @@ CuStr cu_str_empty(void);
 int cu_str_eq(CuStr a, CuStr b);
 /* Aborts when i >= s.len. */
 char cu_str_at(CuStr s, size_t i);
+/* cu_str_at without a call when i is in bounds; out of bounds it calls
+ * cu_str_at, which aborts. Evaluates s and i more than once, so pass
+ * expressions without side effects. */
+#define CU_STR_AT_FAST(s, i) ((size_t)(i) < (s).len ? (s).ptr[(size_t)(i)] : cu_str_at((s), (i)))
 
 /* Slicing clamps to the string, so it never makes a view outside it. */
 CuStr cu_str_prefix(CuStr s, size_t n);
@@ -172,7 +227,9 @@ CuStr cu_str_trim(CuStr s);
 int cu_str_starts_with(CuStr s, CuStr prefix);
 int cu_str_ends_with(CuStr s, CuStr suffix);
 /* Returns 1 and stores the first match's offset in *at, or returns 0 and
- * leaves *at unchanged. The empty needle matches at 0. */
+ * leaves *at unchanged. The empty needle matches at 0. Linear in s.len +
+ * needle.len on any input: memchr and memcmp on ordinary text, switching to
+ * Two-Way matching when candidates for the first byte come too often. */
 int cu_str_find(CuStr s, CuStr needle, size_t *at);
 /* Splits around the first sep. If sep is absent, returns 0 with
  * *before = s and *after empty. */
@@ -222,7 +279,10 @@ void cu_sb_long(CuBuilder *b, long v);
 /* Lowercase hex, zero-padded to at least min_digits. */
 void cu_sb_hex(CuBuilder *b, unsigned long v, size_t min_digits);
 /* Stores the built string in *out and returns 1, or stores the empty string
- * and returns 0 if any append failed. */
+ * and returns 0 if any append failed. The view stays valid while the
+ * builder keeps growing (until its scope ends or the arena is released):
+ * a builder grows in place or into a new buffer, leaving the old bytes
+ * where they were, so it can also append its own finished contents. */
 CU_MUST_USE int cu_sb_finish(CuBuilder *b, CuStr *out);
 
 /* ---- Binary reading and writing ------------------------------------- */
@@ -255,9 +315,11 @@ void cu_sb_u32be(CuBuilder *b, unsigned long v);
  * passes sizeof the element type at the call site, and a size that does not
  * match the vector's element size aborts, so most type mix-ups are caught.
  * Pushes never fail loudly: a failure marks the vector, the push is skipped,
- * and cu_vec_failed reports it. Growth moves the elements, so pointers from
- * CU_VEC_AT and CU_VEC_DATA are valid only until the next push or reserve.
- * Push and reserve only under the temp scope the vector was initialised in. */
+ * and cu_vec_failed reports it. Growth moves the elements and may free the
+ * old buffer (cu_arena_grow), so pointers from CU_VEC_AT and CU_VEC_DATA,
+ * and the data field, are valid only until the next push or reserve.
+ * Pushing a pointer to one of the vector's own elements is allowed. Push
+ * and reserve only under the temp scope the vector was initialised in. */
 typedef struct CuVec {
     CuArena *arena;
     char *data;
@@ -277,6 +339,22 @@ typedef struct CuVec {
 #define CU_VEC_AT(v, T, i) ((T *)cu_vec_at_((v), (i), sizeof(T)))
 /* Pointer to the first element, for loops over 0..len. Never NULL. */
 #define CU_VEC_DATA(v, T) ((T *)cu_vec_data_((v), sizeof(T)))
+
+/* CU_VEC_PUSH and CU_VEC_AT with their common case inline: every check the
+ * function makes is made first (NULL, element size, bounds; for a push also
+ * the temp scope, failure and spare capacity), and anything else calls the
+ * function, which aborts, grows or skips exactly as it would. They evaluate
+ * their arguments more than once, so pass expressions without side effects.
+ * A push copies through memcpy, which is why cu.h includes <string.h>. */
+#define CU_VEC_PUSH_FAST(v, p)                                                          \
+    ((v) != NULL && (p) != NULL && sizeof *(p) == (v)->elem_size && !(v)->failed &&     \
+             (v)->len < (v)->cap && (v)->arena->scope == (v)->scope                      \
+         ? (void)(memcpy((v)->data + (v)->len * sizeof *(p), (p), sizeof *(p)), (v)->len++) \
+         : cu_vec_push_((v), (p), sizeof *(p)))
+#define CU_VEC_AT_FAST(v, T, i)                                                         \
+    ((v) != NULL && sizeof(T) == (v)->elem_size && (size_t)(i) < (v)->len               \
+         ? (T *)(void *)((v)->data + (size_t)(i) * sizeof(T))                           \
+         : CU_VEC_AT((v), T, (i)))
 
 /* elem_size 0 aborts. */
 void cu_vec_init(CuVec *v, CuArena *a, size_t elem_size);
@@ -414,6 +492,7 @@ typedef struct CuPool {
     size_t free_head; /* first reusable slot, or (size_t)-1 */
     size_t len;       /* live objects */
     size_t value_size;
+    size_t stride;    /* bytes per slot, header and value; 0: overflowed */
     unsigned long max_gen;
     size_t scope;
     int failed;
@@ -508,7 +587,10 @@ CU_MUST_USE int cu_file_read(CuArena *a, const char *path, CuStr *out);
 
 /* Reads f from its current position to EOF (standard input, a pipe).
  * Leaves f open, with its position and EOF/error indicators changed.
- * Even an empty stream needs an initial buffer allocation. */
+ * Even an empty stream needs an initial buffer allocation. The buffer
+ * doubles as it fills, growing in place while it is the arena's newest
+ * allocation (cu_arena_grow), so a read alone in its scope holds less than
+ * twice its length. */
 CU_MUST_USE int cu_stream_read(CuArena *a, FILE *f, CuStr *out);
 
 /* Chunked, blocking input without seeks or arena allocations. A CuInput
@@ -536,7 +618,9 @@ void cu_input_attach(CuInput *in, FILE *stream);
  * buf, but none are published. Error wins over EOF and is sticky, including
  * after failed open. A final partial DATA can cache END for the next call.
  * Existing FILE error flags are reported with errno at entry. No call
- * clears the borrowed stream's flags. Reads after successful close abort. */
+ * clears the borrowed stream's flags. Reads after successful close abort.
+ * Each call goes through stdio, so it runs at read(2) speed only with
+ * chunks of 64 KiB or more; smaller chunks cost measurably more per byte. */
 CU_MUST_USE CuInputStatus cu_input_read(CuInput *in, void *buf, size_t cap, size_t *n);
 /* Closes an owned stream or detaches a borrowed one. Idempotent: returns
  * the same aggregate status on repeats, 0 for any prior or close error,

@@ -148,6 +148,14 @@ static void test_read_stream(int debug)
         free(data);
     }
     cu_arena_release(&a);
+    /* Growth reuses the buffer's own block, so a lone read holds its final
+     * capacity, which doubling keeps under twice the length. */
+    f = fopen(path, "rb");
+    assert(f != NULL);
+    assert(cu_stream_read(&a, f, &s) && s.len == 70000);
+    assert(fclose(f) == 0);
+    assert(a.held < 2 * s.len + 1024);
+    cu_arena_release(&a);
     assert(remove(path) == 0);
 }
 

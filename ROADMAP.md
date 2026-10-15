@@ -10,7 +10,7 @@ Temp scopes carry ids, so ending one out of order or twice aborts, and each cont
 
 Next, in order:
 
-1. **A first consumer.** No new core primitive until real code needs it. Build the smallest real program on the core (the whole-file reader from layer 2 and line splitting from layer 3 are candidates) and let it decide what the core lacks. It is also the first benchmark of "fast": vector and builder growth abandon their old buffers in the arena, and each map entry costs three pushes; measure before changing either.
+1. **A first consumer.** No new core primitive until real code needs it. Build the smallest real program on the core (the whole-file reader from layer 2 and line splitting from layer 3 are candidates) and let it decide what the core lacks. It is also the first benchmark of "fast". The growth and map costs this item said to measure first were measured and addressed in the [2026-10-14 performance review](docs/PERFORMANCE-REVIEW-20261014.md): vectors and stream reads grow in place through `cu_arena_grow` (builders only within their block, so finished views stay valid), each map entry is one push with its hash stored, and ended scopes keep a block for reuse. Its Disposition table lists what remains.
 2. **`regions` check.** Static check for arena lifetime bugs (design: `dependable-c-agent-toolchain/docs/REGIONS.md`). This repo and its first consumer are its first real targets.
 
 ## 2. Platform module

@@ -150,6 +150,59 @@ static void test_failed_add_is_sticky(CuArena *a)
     assert(cu_pool_get_(&p, cu_handle_null(), huge) == NULL);
 }
 
+/* A value size whose slot (header plus value) overflows size_t fails the
+ * same way. */
+static void test_slot_size_overflow_fails(CuArena *a)
+{
+    CuPool p;
+    long v;
+    size_t huge;
+
+    /* Shifts, not (size_t)-1 - 15: Cerberus (git-b3e11ea) truncates that
+     * subtraction to 32 bits, which would make this value small. */
+    huge = (size_t)-1 >> 4 << 4;
+    cu_pool_init(&p, a, huge);
+    v = 1;
+    assert(cu_handle_is_null(cu_pool_add_(&p, &v, huge)));
+    assert(cu_pool_failed(&p) && cu_pool_len(&p) == 0);
+}
+
+typedef struct Obj {
+    double d[3];
+    long a;
+} Obj;
+
+/* Each slot keeps its header next to its value, so a pool holds little
+ * beyond its objects, and every value is aligned for its type. */
+static void test_layout(void)
+{
+    CuArena a;
+    CuPool p;
+    CuHandle h;
+    Obj o;
+    Obj *got;
+    size_t i;
+    size_t n;
+
+    n = 640;
+    cu_arena_init_with(&a, 64, 1);
+    CU_POOL_INIT(&p, &a, Obj);
+    for (i = 0; i < n; i++) {
+        o.d[0] = 0.5;
+        o.d[1] = 1.5;
+        o.d[2] = 2.5;
+        o.a = (long)i;
+        h = CU_POOL_ADD(&p, &o);
+        got = CU_POOL_GET(&p, Obj, h);
+        assert(got != NULL && got->a == (long)i && got->d[2] > 2.0);
+        assert((size_t)got % sizeof(double) == 0 && (size_t)got % sizeof(long) == 0);
+    }
+    /* Debug mode holds exactly what is pushed. Under 1.65 times the
+     * objects' bytes; separate header and value arrays took over 1.75. */
+    assert(a.held / 33 * 20 < n * sizeof(Obj));
+    cu_arena_release(&a);
+}
+
 /* Run n fails allocation n alone, so each allocation fails in turn while
  * the ones after it succeed; the runs end when one makes no more than n
  * allocations, and only that run may succeed. */
@@ -280,6 +333,8 @@ int main(void)
     test_many_objects_stay_put(&a);
     test_retires_at_max_generation(&a);
     test_failed_add_is_sticky(&a);
+    test_slot_size_overflow_fails(&a);
+    test_layout();
     test_add_fails_at_every_allocation(0);
     test_add_fails_at_every_allocation(1);
     cu_arena_release(&a);

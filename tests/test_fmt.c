@@ -1,6 +1,7 @@
 #include "death.h"
 #include <assert.h>
 #include <limits.h>
+#include <string.h>
 #include "cu.h"
 
 /* Builder and parsing together: every formatted number must parse back. */
@@ -114,6 +115,66 @@ static void test_parse_ulong(CuArena *a)
     assert(!cu_parse_ulong(cu_str_cstr(bumped), 10, &v));
 }
 
+/* Writes v in base, either letter case, into the end of buf; returns the
+ * first digit. */
+static char *ref_digits(unsigned long v, unsigned base, int upper, char *end)
+{
+    const char *digits;
+
+    digits = upper ? "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ" : "0123456789abcdefghijklmnopqrstuvwxyz";
+    do {
+        *--end = digits[v % base];
+        v /= base;
+    } while (v != 0);
+    return end;
+}
+
+/* In each base tried (both ends, powers of two, and odd ones; every base
+ * takes too long under Cerberus), the overflow boundary is exact: ULONG_MAX parses, and so
+ * does ULONG_MAX / base followed by any digit up to ULONG_MAX % base; the
+ * next digit, or one digit more, overflows. */
+static void test_parse_ulong_bounds(void)
+{
+    static const unsigned bases[] = {2, 3, 7, 8, 10, 16, 35, 36};
+    char buf[80];
+    size_t b;
+    char *end;
+    char *first;
+    unsigned base;
+    unsigned long v;
+    unsigned long lim;
+    unsigned long rem;
+    unsigned long d;
+    const char *digits;
+
+    digits = "0123456789abcdefghijklmnopqrstuvwxyz";
+    end = buf + sizeof buf - 1;
+    for (b = 0; b < sizeof bases / sizeof bases[0]; b++) {
+        base = bases[b];
+        first = ref_digits(ULONG_MAX, base, (int)(base % 2), end);
+        assert(cu_parse_ulong(cu_str_n(first, (size_t)(end - first)), base, &v) && v == ULONG_MAX);
+        *end = '0';
+        assert(!cu_parse_ulong(cu_str_n(first, (size_t)(end - first) + 1), base, &v));
+        lim = ULONG_MAX / base;
+        rem = ULONG_MAX % base;
+        first = ref_digits(lim, base, 0, end);
+        for (d = 0; d < base; d++) {
+            *end = digits[d];
+            v = 7;
+            if (d <= rem)
+                assert(cu_parse_ulong(cu_str_n(first, (size_t)(end - first) + 1), base, &v) &&
+                       v == lim * base + d);
+            else
+                assert(!cu_parse_ulong(cu_str_n(first, (size_t)(end - first) + 1), base, &v) && v == 7);
+        }
+        /* Bytes next to the digit and letter ranges are not digits. */
+        assert(!cu_parse_ulong(CU_LIT("/"), base, &v) && !cu_parse_ulong(CU_LIT(":"), base, &v));
+        assert(!cu_parse_ulong(CU_LIT("@"), base, &v) && !cu_parse_ulong(CU_LIT("["), base, &v));
+        assert(!cu_parse_ulong(CU_LIT("`"), base, &v) && !cu_parse_ulong(CU_LIT("{"), base, &v));
+        assert(!cu_parse_ulong(cu_str_n("\xb0", 1), base, &v));
+    }
+}
+
 static void test_parse_long(CuArena *a)
 {
     long v;
@@ -200,6 +261,138 @@ static void test_append_fails_at_every_allocation(int debug)
     }
 }
 
+/* Appends v to b as cu_sb_ulong and cu_sb_hex, and the same text, built
+ * by ref_digits, to want at *w. Padding and signs have their own tests. */
+static void add_formats(CuBuilder *b, char *want, size_t *w, unsigned long v)
+{
+    char buf[80];
+    char *end;
+    char *first;
+    size_t n;
+
+    end = buf + sizeof buf;
+    cu_sb_ulong(b, v);
+    cu_sb_char(b, ' ');
+    cu_sb_hex(b, v, 0);
+    cu_sb_char(b, ' ');
+
+    first = ref_digits(v, 10, 0, end);
+    n = (size_t)(end - first);
+    memcpy(want + *w, first, n);
+    want[*w + n] = ' ';
+    *w += n + 1;
+    first = ref_digits(v, 16, 0, end);
+    n = (size_t)(end - first);
+    memcpy(want + *w, first, n);
+    want[*w + n] = ' ';
+    *w += n + 1;
+}
+
+/* Every value below 100 and every multiple of 101 below 10000 (each digit
+ * pair, in both places the decimal writer uses its table), every power of ten with its neighbours, and
+ * every power of two and the value below it, against a plain
+ * divide-by-base reference. One builder holds it all: per-call setup is
+ * what makes this slow under Cerberus. The loops count rather than shift
+ * until 0, which Cerberus (git-b3e11ea) does not wrap. */
+static void test_formats_match_reference(void)
+{
+    static char want[20000];
+    CuArena a;
+    CuBuilder b;
+    CuStr out;
+    unsigned long v;
+    unsigned long p;
+    size_t k;
+    size_t w;
+
+    cu_arena_init(&a);
+    cu_sb_init(&b, &a);
+    w = 0;
+    for (v = 0; v < 100; v++) {
+        add_formats(&b, want, &w, v);
+        add_formats(&b, want, &w, v * 101);
+    }
+    p = 1;
+    while (p <= ULONG_MAX / 10) {
+        p *= 10;
+        add_formats(&b, want, &w, p - 1);
+        add_formats(&b, want, &w, p);
+        add_formats(&b, want, &w, p + 1);
+    }
+    for (k = 1; k < sizeof(unsigned long) * CHAR_BIT; k++) {
+        add_formats(&b, want, &w, (1UL << k) - 1);
+        add_formats(&b, want, &w, 1UL << k);
+    }
+    add_formats(&b, want, &w, ULONG_MAX);
+    assert(w <= sizeof want);
+    assert(cu_sb_finish(&b, &out) && cu_str_eq(out, cu_str_n(want, w)));
+    cu_arena_release(&a);
+}
+
+/* A view from cu_sb_finish stays valid while the builder grows, and a
+ * builder can append its own contents: growth never frees the old buffer.
+ * Past its block, the builder takes a new block rather than reallocating. */
+static void test_finished_views_survive_growth(int debug)
+{
+    CuArena a;
+    CuBuilder b;
+    CuStr first;
+    CuStr s;
+    size_t blocks;
+    size_t i;
+
+    cu_arena_init_with(&a, 64, debug);
+    cu_sb_init(&b, &a);
+    cu_sb_str(&b, CU_LIT("hello"));
+    assert(cu_sb_finish(&b, &first));
+    blocks = a.blocks;
+    for (i = 0; i < 200; i++)
+        cu_sb_char(&b, 'x');
+    assert(a.blocks > blocks);
+    assert(cu_str_eq(first, CU_LIT("hello")));
+
+    /* Self-append: the source is the builder's own buffer. */
+    cu_sb_init(&b, &a);
+    for (i = 0; i < 40; i++)
+        cu_sb_char(&b, 'y');
+    assert(cu_sb_finish(&b, &s));
+    cu_sb_str(&b, s);
+    cu_sb_str(&b, s);
+    assert(cu_sb_finish(&b, &s) && s.len == 120);
+    for (i = 0; i < 120; i++)
+        assert(s.ptr[i] == 'y');
+    cu_arena_release(&a);
+}
+
+/* A builder that nothing else pushes after grows in place while its
+ * block has room: the same buffer, no new block, nothing left behind. */
+static void test_growth_in_place(void)
+{
+    CuArena a;
+    CuBuilder b;
+    CuStr out;
+    char *first;
+    size_t blocks;
+    size_t held;
+    size_t i;
+    size_t n;
+
+    n = 1000;
+    cu_arena_init_with(&a, 4096, 0);
+    cu_sb_init(&b, &a);
+    cu_sb_char(&b, 'a');
+    first = b.data;
+    blocks = a.blocks;
+    held = a.held;
+    for (i = 1; i < n; i++)
+        cu_sb_char(&b, (char)('a' + (char)(i % 26)));
+    assert(cu_sb_finish(&b, &out) && out.len == n && out.ptr == first);
+    assert(a.blocks == blocks && a.held == held);
+    for (i = 0; i < n; i++)
+        assert(out.ptr[i] == (char)('a' + (char)(i % 26)));
+    cu_arena_release(&a);
+}
+
 #ifdef CU_DEATH_TESTS
 static void char_null_builder(void)
 {
@@ -276,11 +469,15 @@ int main(void)
         test_builder_failure_is_sticky(&a);
         test_append_fails_at_every_allocation(debug);
         test_hex_padding(debug);
+        test_finished_views_survive_growth(debug);
         test_parse_ulong(&a);
         test_parse_long(&a);
         assert(cu_arena_failed(&a) == 0);
         cu_arena_release(&a);
     }
+    test_formats_match_reference();
+    test_growth_in_place();
+    test_parse_ulong_bounds();
 #ifdef CU_DEATH_TESTS
     death_tests();
 #endif
