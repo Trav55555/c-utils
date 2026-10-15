@@ -8,10 +8,15 @@ Done: arena + temp scopes + scratch arenas, debug arena mode, checked size math,
 
 Temp scopes carry ids, so ending one out of order or twice aborts, and each container aborts when grown under a scope other than the one it was made in. The `regions` check below is the static version of that runtime check.
 
+Done: **a first consumer.** cgrep (`~/projects/cgrep`, CI-pinned to a c-utils revision) streams literal searches over explicit files or stdin using only the arena, `CuStr`, `CuVec` and `CuInput`. The growth and map costs it was meant to measure were addressed in the [2026-10-14 performance review](docs/PERFORMANCE-REVIEW-20261014.md): vectors and stream reads grow in place through `cu_arena_grow` (builders only within their block, so finished views stay valid), each map entry is one push with its hash stored, and ended scopes keep a block for reuse. Its Disposition table lists what remains. What cgrep had to build itself is what the layers above lack:
+
+- Layer 2: threads, a worker pool and cancellation (hand-rolled on pthreads in cgrep's `src/parallel.inc`); buffered stdout (cgrep stages each line's parts into one `fwrite_unlocked` call); directory walking, which cgrep does not have at all, so it searches only the paths it is given.
+- Layer 3: a vectorised literal finder and newline counter (in cgrep's `src/cgrep.c`, using GCC/Clang vector types around libc `memchr`).
+
 Next, in order:
 
-1. **A first consumer.** No new core primitive until real code needs it. Build the smallest real program on the core (the whole-file reader from layer 2 and line splitting from layer 3 are candidates) and let it decide what the core lacks. It is also the first benchmark of "fast". The growth and map costs this item said to measure first were measured and addressed in the [2026-10-14 performance review](docs/PERFORMANCE-REVIEW-20261014.md): vectors and stream reads grow in place through `cu_arena_grow` (builders only within their block, so finished views stay valid), each map entry is one push with its hash stored, and ended scopes keep a block for reuse. Its Disposition table lists what remains.
-2. **`regions` check.** Static check for arena lifetime bugs (design: `dependable-c-agent-toolchain/docs/REGIONS.md`). This repo and its first consumer are its first real targets.
+1. **`regions` check.** Static check for arena lifetime bugs (design: `dependable-c-agent-toolchain/docs/REGIONS.md`). This repo and cgrep are its first real targets.
+2. **The next platform slice**, chosen between threads (moving cgrep's worker pool here) and a directory walk (which cgrep needs before it can search directories).
 
 ## 2. Platform module
 
