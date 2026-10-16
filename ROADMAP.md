@@ -8,31 +8,36 @@ Done: arena + temp scopes + scratch arenas, debug arena mode, checked size math,
 
 Temp scopes carry ids, so ending one out of order or twice aborts, and each container aborts when grown under a scope other than the one it was made in. The `regions` check below is the static version of that runtime check.
 
-Done: **a first consumer.** cgrep (`~/projects/cgrep`, CI-pinned to a c-utils revision) streams literal searches over explicit files or stdin using only the arena, `CuStr`, `CuVec` and `CuInput`. The growth and map costs it was meant to measure were addressed in the [2026-10-14 performance review](docs/PERFORMANCE-REVIEW-20261014.md): vectors, stream reads and builders grow in place through `cu_arena_grow` (builders only until they hand out a finished view, which then stays valid), each map entry is one push with its hash stored, and ended scopes keep a block for reuse. Its Disposition table lists what remains. What cgrep had to build itself is what the layers above lack:
+Done: **a first consumer.** cgrep (`~/projects/cgrep`, CI-pinned to a c-utils revision) streams literal searches over explicit files, stdin and directory trees. It uses `CuInput` for input and `CuDir` for its own recursive walk. Ignore-file handling and bounded, ordered file parallelism stay in cgrep. The growth and map costs it was meant to measure were addressed in the [2026-10-14 performance review](docs/PERFORMANCE-REVIEW-20261014.md): vectors, stream reads and builders grow in place through `cu_arena_grow` (builders only until they hand out a finished view, which then stays valid), each map entry is one push with its hash stored, and ended scopes keep a block for reuse. Its Disposition table lists what remains.
 
-- Layer 2: threads, a worker pool and cancellation (hand-rolled on pthreads in cgrep's `src/parallel.inc`); buffered stdout (cgrep stages each line's parts into one `fwrite_unlocked` call); directory walking, which cgrep does not have at all, so it searches only the paths it is given.
-- Layer 3: a vectorised literal finder and newline counter (in cgrep's `src/cgrep.c`, using GCC/Clang vector types around libc `memchr`).
+Commit `ef33d78` ships arena-owned `CuThread`, `CuMutex` and broadcast `CuCond`, with stack-size selection, automatic worker scratch cleanup and startup fault injection. The toolchain supplies a TSan gate and a deliberate-race fixture. The pinned c-utils deep CI passed, including regions and TSan. These checks do not prove all lifetimes or thread schedules.
+
+cgrep's thread migration is published to GitHub and Gitea as `547171a`. Follow-up `bf6c005` pins its CI reference to checksum-validated ripgrep 15.2.0, resolving the older reference's ignore-rule differences without changing production C or test budgets. [Pinned acceptance run 535](https://git.traversannan.com/trav/cgrep/actions/runs/535) passed all 12,000 ordered comparisons and 2,000 ignore comparisons. cgrep's scheduling, cancellation and two bounded slots per worker remain application policy, not a proposed generic queue.
+
+Remaining consumer code includes per-batch output staging, write-error and flush handling, path classification, and a vectorised literal finder and newline counter. The finder uses GCC/Clang vector types around libc `memchr` and stays in cgrep until another caller establishes a reusable interface.
 
 Next, in order:
 
-1. **`regions` check.** Static check for arena lifetime bugs (design: `dependable-c-agent-toolchain/docs/REGIONS.md`). This repo and cgrep are its first real targets.
-2. **Threads: cgrep onto them.** Slice 1 (start and join, mutex, condition, fault seam) is implemented ([design](docs/THREADS.md)); cgrep moves its pool's plumbing onto it next, then a work queue if a second user wants one.
+1. **Extend `regions` adoption.** This repo enables `REGIONS_CHECK=1`, with one documented `cu_arena_grow` exception. cgrep does not enable the check yet, and its CI runner lacks the checker binary. Audit its contracts before enabling it. Thread creation deliberately has no borrowing model; temp or scratch callback contexts produce `rg-unchecked`, not a scope-safety guarantee. See `dependable-c-agent-toolchain/docs/REGIONS.md`.
+2. **Assess path and metadata helpers.** Use cgrep's existing path classification and walking code to identify a small shared contract. Keep traversal and ignore policy in the consumer.
+3. **Resolve the `CuOutput` experiment.** Borrowed-FILE and callback-sink prototypes preserved the observed cgrep output and failure cases. The FILE-only interface is smaller. Two 21-round timing runs, including a lower-load repeat, did not resolve the 5% performance gate. Use a longer, controlled comparison before production adoption. Stdio already buffers; another persistent buffer needs evidence. No output API has shipped.
+
+A generic work queue, worker pool or atomics API waits for a caller that needs more than the existing thread APIs.
 
 ## 2. Platform module
 
 The only code allowed to touch the OS. Everything above it stays portable C89.
 
-- Files: read whole file into an arena, buffered reader/writer, directory walking. Done: whole-file and stream reads, chunked input (`CuInput`), and listing one directory (`CuDir`). A recursive walk waits until cgrep, which recurses on `CuDir` itself, shows what it needs.
-- Threads: start/join, mutex, condition variable, a work queue (see `dependable-c-agent-toolchain/docs/CONCURRENCY.md`). Shared flags and pointers use atomics with acquire/release ordering (C11 `<stdatomic.h>` or compiler builtins, wrapped here), never `volatile`: `volatile` stops the compiler eliding accesses but gives neither atomicity nor ordering.
+- Files. Whole-file and stream reads, chunked input (`CuInput`), and listing one directory (`CuDir`) are implemented. cgrep recurses on `CuDir` and owns its ignore rules. Output helpers, lexical path operations and portable metadata remain candidates, not completed modules.
+- Threads. Start/join, mutex and broadcast conditions are implemented on POSIX. WASI and Cerberus use the `ENOSYS` backend. Join workers and destroy synchronization objects before releasing their arena-owned records. Arenas and containers do not become thread-safe by using them. Shared cancellation state in cgrep stays under its mutex. No atomics or generic queue are implemented; `volatile` is not synchronization. See the [thread design](docs/THREADS.md) and `dependable-c-agent-toolchain/docs/CONCURRENCY.md`.
 - Time, environment, process exit codes. Effects are visible to Ward's `authority` check.
 
 ## 3. Tools: ripgrep-style search
 
 The proving ground for "safe and fast". Needs, beyond the core:
 
-- `memchr`-driven line splitting and literal search (libc's `memchr` is SIMD; keep it).
-- A regex engine: Thompson NFA first, then a lazy DFA. Linear time by construction, no backtracking blowups.
-- `.gitignore`-aware directory walk, and a thread pool over files.
+- Implemented in cgrep: `memchr`-driven literal search, SIMD-assisted scanning, recursive directory walking with ignore-file rules, and bounded parallel file search. Its thread-API migration passed the pinned acceptance run above.
+- Future work: a regex engine, starting with a Thompson NFA and then a lazy DFA. Linear time by construction, no backtracking blowups. A regex engine is not part of the next c-utils slice.
 
 Benchmark against `rg` on a fixed corpus. The target is within 2x before optimising further.
 

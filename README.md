@@ -1,178 +1,263 @@
 # c-utils
 
-Safe, fast primitives for [Dependable C](https://dependablec.org/) (the C89 subset that `dcheck` enforces). Each primitive removes a class of bugs by construction rather than by care.
+Strings, containers, file I/O, and threads for C89, with explicit memory
+ownership and checked bounds. Allocate related data in one arena, use scopes
+for temporary work, and release it together instead of freeing each object.
 
-| Bug class | Primitive |
-|---|---|
-| Use after free, double free, leaks | `CuArena` with temp scopes and per-thread scratch arenas: no per-object `free`; a scope ended out of order or twice aborts, and so does growing a container under a scope that would free its memory |
-| Overflow in `count * size` | `cu_arena_push(a, count, elem_size)` checks the multiply; `cu_size_add` and `cu_size_mul` for your own sizes |
-| Buffer overruns on strings | `CuStr` views carry their length; slicing clamps; `cu_str_at` aborts out of bounds; `CU_LIT` only accepts literals |
-| `NULL` + length bugs | `CuStr.ptr` is never `NULL` |
-| `sprintf` overflows and format mismatches | `CuBuilder`: typed appends, no format strings |
-| `atoi`/`strtol` silent failures | `cu_parse_ulong`/`cu_parse_long`: whole-string, overflow-checked, ok flag |
-| `<ctype.h>` UB on negative `char` and locale surprises | `cu_ascii_*` |
-| Hash tables that rehash, move entries or borrow keys | `CuMap` hash trie: arena-backed, entries never move, keys copied, iteration in insertion order |
-| Dangling pointers to long-lived objects | `CuPool`: generational handles; a stale, null or forged handle gets `NULL`, never memory |
-| Dangling and mistyped links in graphs, cycles and back links | `CuPlex`: nodes link by typed `CuLink`, so a removed or wrong-kind node is `NULL`, never followed |
-| Pointer casts, misaligned loads and sign extension in binary formats | `cu_rd_u32le` and friends read bounds-checked, endian-explicit integers from a `CuStr`; `cu_sb_u32le` and friends write them |
-| Array overruns and element-type mix-ups | `CuVec` (arena-backed growth) and `CuSlice` (views with clamped sub-slicing): bounds-checked `AT`, element size checked at every call |
-| Ignored errors | `CU_MUST_USE` on every fallible call; failures are sticky so one check covers a sequence |
+[![Native tests](https://github.com/Trav55555/c-utils/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/Trav55555/c-utils/actions/workflows/test.yml)
 
-Error policy, memory policy and every function's contract are at the top of `include/cu.h`.
+The library follows the [Dependable C](https://dependablec.org/) subset,
+but you do not need its checker to compile or use it. There is one public
+header, [`include/cu.h`](include/cu.h), plus C source files. This is **not a
+header-only library**.
 
-## Example
+[Quick start](#quick-start) · [Integration](#integration) ·
+[API guide](#api-guide) · [Ownership and errors](#ownership-and-errors) ·
+[Tests and platforms](#tests-and-platforms)
+
+## Quick start
+
+Clone the repository:
+
+```sh
+git clone https://github.com/Trav55555/c-utils.git
+cd c-utils
+```
+
+Save this as `hello.c` in the repository root. It builds a string in an
+arena and writes exactly its length, without assuming a terminating NUL.
 
 ```c
 #include "cu.h"
 
-/* Returns "name=value" built in the caller's arena. */
-CuStr pair(CuArena *out, CuStr name, unsigned long value)
+int main(void)
 {
-    CuBuilder b;
-    CuStr s;
+	CuArena arena;
+	CuBuilder builder;
+	CuStr text;
+	int result;
 
-    cu_sb_init(&b, out);
-    cu_sb_str(&b, name);
-    cu_sb_char(&b, '=');
-    cu_sb_ulong(&b, value);
-    if (!cu_sb_finish(&b, &s))
-        return cu_str_empty();
-    return s;
+	cu_arena_init(&arena);
+	cu_sb_init(&builder, &arena);
+	cu_sb_str(&builder, CU_LIT("items="));
+	cu_sb_ulong(&builder, 3UL);
+	cu_sb_char(&builder, '\n');
+	result = 1;
+	if (!cu_sb_finish(&builder, &text))
+		goto done;
+	if (fwrite(text.ptr, 1, text.len, stdout) != text.len)
+		goto done;
+	if (fflush(stdout) != 0)
+		goto done;
+	result = 0;
+done:
+	cu_arena_release(&arena);
+	return result;
 }
 ```
 
-## Debug arenas
-
-With `CU_ARENA_DEBUG` defined, or when built with AddressSanitizer, every push is its own `malloc`. Sanitizers (and Fil-C) then see each object's bounds, and memory from an ended temp scope is really freed, so a stale pointer is reported instead of silently reading reused memory. `cu_arena_init_with(&a, block_size, 1)` turns it on for one arena.
-
-## Arena limits
-
-`cu_arena_set_limit(&a, max_bytes)` caps the bytes an arena's blocks may hold, so memory spent on untrusted input has a ceiling. A push past the cap fails exactly like running out of memory. After a refusal, `a.held + a.refused` is the smallest cap under which that push succeeds.
-
-`cu_arena_fail_at(&a, n)` is the test hook: block allocation number `n` (counted in `a.attempts`) fails, and every other one succeeds. Each container's tests step `n` from 0 until a run makes no more than `n` allocations, so every out-of-memory path runs in ordinary tests. Failing one allocation, not every one past a cap, is what catches code that ignores a failure: later allocations still succeed, so nothing hides it.
-
-## Temp scopes and containers
-
-Containers (`CuBuilder`, `CuVec`, `CuMap`, `CuPool`, `CuPlex`) keep their memory in their arena and remember the temp scope that was innermost when they were initialised. Any mutating call (append, push, reserve, upsert, add) under another scope aborts, because ending that scope would free the container's memory under it. Reading is allowed under newer scopes while the container's own scope is open. To build something inside a scope, initialise the container inside it too. Growing a container after its arena is released aborts too. Re-initialising an arena that still has containers is not detected.
-
-## Growth and speed
-
-`CuVec` and `cu_stream_read` grow through `cu_arena_grow`: when the buffer is the arena's newest allocation it extends into the rest of its block, or reallocates a block it has to itself (made inside the innermost temp scope), so nothing is left behind. A buffer that something else was pushed after moves and leaves its old copy in the arena. A reallocation frees the old buffer, as `realloc` does; `CuVec` already invalidates element pointers on every push, and pushing one of its own elements is handled. Memory from before the innermost temp scope is never grown in place, so a scope's end still frees exactly what was pushed in it.
-
-`CuBuilder` reallocates through `cu_arena_grow` until `cu_sb_finish` hands out a view, so a builder that is finished once holds about its capacity, not twice it. After a finish it grows in place within its block (`cu_arena_extend`) or moves to a new buffer and leaves the old bytes where they were, so views from `cu_sb_finish` stay valid while the builder keeps growing, and a builder can append its own contents.
-
-Ending a temp scope keeps its largest block for the arena's next block (except in debug mode), so a scope that is filled and ended in a loop does not go back to `malloc` each time. `a.cached` counts that block; `a.held` counts live blocks only, and the limit caps the two together.
-
-`CU_STR_AT_FAST`, `CU_VEC_AT_FAST` and `CU_VEC_PUSH_FAST` do the common case in the header, after every check the function would make, and call the function otherwise. They evaluate their arguments more than once. Every other call crosses translation units, so build with `-flto` (or `-O2 -flto` like `dcheck`'s release check) to let the compiler inline the library into hot loops; there is no unity build file, because consumers compile `src/*.c` directly.
-
-## Typed access
-
-Containers and slices store values as bytes and hand them back as `void *`. Each typed macro (`CU_VEC_AT`, `CU_SLICE_AT`, `CU_MAP_GET`, `CU_POOL_GET`, `CU_PLEX_GET` and the rest) passes `sizeof` its type, and the call aborts if that differs from the size the container was initialised with. A type of a different size is therefore caught on every call, but a different type of the same size (`int` for `float`, or two structs that happen to match) is not: the size is the only type information that survives. `CuPlex` adds a kind number to each link, so links are checked by kind as well as size. Code held to MISRA-style rules should still treat each conversion from `void *` as a deviation to justify.
-
-## Files and streams
-
-`cu_file_read(&arena, path, &text)` reads a whole file, including NUL bytes,
-and closes it on every path. `cu_stream_read(&arena, stream, &text)` reads
-from the stream's current position to EOF and leaves it open. Both return
-0 on I/O or allocation failure and set `text` to an empty, non-NULL view.
-Allocation failures mark the arena; I/O failures leave its memory status
-alone. The view lives until its arena scope ends.
-
-The file size is an allocation hint. If it cannot be queried, the reader
-rewinds and grows the buffer as needed. Streams also grow by doubling,
-in place while the buffer is the arena's newest allocation; a buffer that
-has to move leaves its old copy in the arena until the scope ends. Use the
-arena byte limit when reading untrusted input.
-
-`CuInput` provides chunked input without seeks or arena allocations. Open
-an owned file with `cu_input_open`, or borrow an existing `FILE` at its
-current position with `cu_input_attach`. The caller supplies each buffer.
-
-```c
-CuInput input;
-CuInputStatus status;
-char buffer[4096];
-size_t n;
-
-if (cu_input_open(&input, "data.txt")) {
-    while ((status = cu_input_read(&input, buffer, sizeof buffer, &n)) == CU_INPUT_DATA) {
-        /* Consume exactly n bytes; buffer is not NUL-terminated. */
-    }
-    if (!cu_input_close(&input)) {
-        /* Inspect cu_input_errno(&input): first read or close error. */
-    }
-}
-```
-
-`CU_INPUT_END` and `CU_INPUT_ERROR` publish zero bytes. A failed read may
-consume bytes and modify the buffer but publishes none. EOF and error
-states are sticky. Closing preserves the first error, including errno
-zero, and repeated closes do not call stdio again. A borrowed stream stays
-open with its position and flags unchanged by detach. Keep its use
-exclusive while attached, and close an active owner before reinitializing
-or copying storage. Reads after successful close abort.
-
-The first consumer is the streaming literal-search slice of
-[cgrep](../cgrep/README.md).
-
-## Directories
-
-`CuDir` lists one directory: each entry once, in no particular order,
-without `.` and `..`. Each entry has a name, copied into the arena with a
-NUL after it, and a kind: file, directory, link (never followed), or other.
-A walker keeps memory bounded by opening a temp scope per directory:
-
-```c
-CuTemp t;
-CuDir dir;
-CuDirEntry e;
-int r;
-
-t = cu_temp_begin(&arena);
-if (cu_dir_open(&dir, &arena, path)) {
-    while ((r = cu_dir_next(&dir, &e)) == 1) {
-        /* Keep e.name; it lives until cu_temp_end(t). */
-    }
-    cu_dir_close(&dir);
-    if (r < 0) {
-        /* Inspect cu_dir_errno(&dir); 0 means memory ran out. */
-    }
-}
-cu_temp_end(t);
-```
-
-Errors are sticky. Where the platform has no POSIX directories (Cerberus,
-for one), `cu_dir_open` fails with `ENOSYS`. Builds that include a system
-header before `src/cu_dir.c` need `_DEFAULT_SOURCE` defined, as
-`dcheck.conf` does.
-
-## Threads
-
-`cu_thread_start` runs a function on a new thread, with a stack size (0
-for the platform default), and `cu_thread_join` waits for it; there is no
-detach. `CuMutex` and `CuCond` (broadcast only) are opaque objects held in
-the caller's arena, so `cu.h` names no platform type; join and destroy
-them before releasing it. Starting and initialising return 0 with errno
-(ENOSYS where there are no threads, as on wasm32-wasi and Cerberus, so
-callers keep a serial path); detected misuse and platform-reported errors
-abort. Mutex ownership rules remain the caller's responsibility.
-`cu_thread_fail_at(n)` makes the nth start or init fail, for tests. Each
-thread releases its scratch arenas when its function returns. Design:
-[docs/THREADS.md](docs/THREADS.md).
-
-## Checks
+Compile on a POSIX host with GCC or Clang, then run. `cc` is your C
+compiler; use `gcc` or `clang` explicitly if you prefer.
 
 ```sh
-make test    # plain build and run of every test; needs only a C compiler
-make check   # dcheck gate: C89 subset, lint, gcc/clang/tcc matrix, analyzer,
-             # ASan+UBSan, MSan, -O2 -flto, wasm32-wasi, coverage >= 90%
-make deep    # + Cerberus, valgrind, libFuzzer, CBMC proofs
+cc -std=c89 -pedantic-errors -Wall -Wextra -Werror -Iinclude hello.c src/*.c -pthread -o hello
+./hello
 ```
 
-`dcheck` lives in `~/projects/dependable-c-agent-toolchain`; override with `make DCHECK=/path/to/dcheck`.
+Expected output:
 
-Proofs: `proofs/proof_str.c` proves slicing, find and cut for every string of up to 4 bytes; `proofs/proof_size.c` proves `cu_size_add` for all inputs. `cu_size_mul` is fuzzed against `__builtin_mul_overflow` (`fuzz/fuzz_size.c`) because a 64-bit multiply proof does not finish in CBMC.
+```text
+items=3
+```
 
-## License
+`-pthread` enables the POSIX thread build and link settings. Older glibc
+requires it to link pthreads; glibc 2.34+ and musl include pthreads in libc.
 
-MIT. See `LICENSE`.
+## Integration
+
+Vendor `include/cu.h`, `src/*.c`, and [LICENSE](LICENSE) into your project.
+Add the header directory to your include path and compile the source files
+alongside your application, as above. You do not need generated code or a
+checker. Use the same compiler flags for the library and your application.
+
+For optimized builds, use `-O2` and, where supported, `-flto` to allow
+inlining across translation units. There is no unity-build file.
+If your build force-includes system headers, define `_POSIX_C_SOURCE=200809L`
+and `_DEFAULT_SOURCE` on the compiler command line so the directory and
+thread modules see their required platform declarations.
+
+## API guide
+
+The [public header](include/cu.h) is the canonical API reference, including
+return values, scope rules, and pointer validity. These are the main groups:
+
+| Need | API |
+|---|---|
+| Allocate and reclaim together | `CuArena`, `CuTemp`, per-thread scratch arenas |
+| Check allocation sizes | `cu_size_add`, `cu_size_mul` |
+| View, slice, search, and split bytes | `CuStr`, `cu_str_*` |
+| Parse whole integers, classify ASCII | `cu_parse_long`, `cu_parse_ulong`, `cu_ascii_*` |
+| Build text without format strings | `CuBuilder`, `cu_sb_*` |
+| Read and write binary integers | Unsigned 8-, 16-, and 32-bit readers and builder appends; explicit byte order |
+| Grow an array or view its elements | `CuVec`, `CuSlice` |
+| Map strings to values | `CuMap`; copied keys, stable entries, insertion-order iteration, no removal |
+| Remove objects without following stale handles | `CuPool`; one value type, generational handles |
+| Link nodes of several kinds, including cycles | `CuPlex`; kind-checked generational links |
+| Read files or streams | `cu_file_read`, `cu_stream_read`, chunked `CuInput` |
+| List one directory's entries | `CuDir` |
+| Start and join threads, synchronize | `CuThread`, `CuMutex`, `CuCond` |
+
+### Push values, then check the vector
+
+Save this second complete program as `values.c`. Use the quick-start
+compile command, replacing `hello.c` with `values.c` and `-o hello`
+with `-o values`. Run `./values` to print `42` and a newline.
+
+```c
+#include "cu.h"
+
+int main(void)
+{
+	CuArena arena;
+	CuVec values;
+	int value;
+	int result;
+
+	cu_arena_init(&arena);
+	CU_VEC_INIT(&values, &arena, int);
+	value = 42;
+	CU_VEC_PUSH(&values, &value);
+	result = 1;
+	if (cu_vec_failed(&values))
+		goto done;
+	if (printf("%d\n", *CU_VEC_AT(&values, int, 0)) < 0)
+		goto done;
+	if (fflush(stdout) != 0)
+		goto done;
+	result = 0;
+done:
+	cu_arena_release(&arena);
+	return result;
+}
+```
+
+`CU_VEC_PUSH` copies the pointed-to value and returns `void`. Check
+`cu_vec_failed` after a sequence of pushes. A push or reserve can invalidate
+all pointers into the vector, including slices of its elements.
+
+## Ownership and errors
+
+Arena allocations are uninitialized. Initialize every field before use.
+There is no per-object free. Memory lasts until its temp scope ends or its
+arena is released. End temp scopes exactly once, in reverse order.
+
+For scratch work, pass every result arena as a conflict to
+`cu_scratch_begin`, then pair it with `cu_scratch_end`. Release a thread's
+scratch arenas with `cu_scratch_release` before exit; threads started by
+`cu_thread_start` do this automatically.
+
+Containers remember the scope in which you initialize them. Mutate them
+only while that same scope is innermost, even if the operation would not
+allocate. Reading under a newer scope is allowed while the owning scope
+remains open. Initialize temporary containers inside their temporary scope.
+Do not reinitialize an arena with live users; stale users of a reinitialized
+arena are not reliably detected.
+
+`CuStr` is a read-only view of `len` bytes, **not a NUL-terminated string**.
+Use `fwrite` as above, or check the result of `cu_str_cstr_copy` when a C API
+needs a terminated copy. String slices borrow their original storage.
+Views returned by `cu_sb_finish` remain valid through later appends, until
+the builder's scope ends or its arena is released. Raw builder data pointers
+do not have that guarantee.
+
+Resource and input failures are returned as `NULL`, an unsuccessful flag,
+or an API-specific status. Arena and container allocation failures are
+sticky. Builders report accumulated append failures through `cu_sb_finish`.
+Check the relevant API's result or failure flag; not every fallible call
+has a compiler-enforced unused-result warning. Contract violations such as
+out-of-bounds access, wrong-scope mutation, and out-of-order scope cleanup
+call `abort()` rather than returning an error.
+
+Whole-file reads close their file; `cu_stream_read` leaves the supplied
+stream open. `CuInput` owns a file opened with `cu_input_open` or borrows a
+stream attached with `cu_input_attach`. Check `cu_input_close` for both prior
+errors and close failures. `cu_input_errno` gives the first saved errno,
+which can be zero even on failure. Borrowed streams remain open; use them
+exclusively through `CuInput` while attached. `cu_dir_next` copies entry
+names into its arena's active scope.
+
+Arena cleanup does not close OS resources. Close owned inputs and directory
+handles explicitly. Join threads and destroy mutexes and conditions **before**
+releasing the arenas or ending the scopes that hold their records. There is
+no thread detach. Mutex ownership and synchronization remain your responsibility.
+
+### Limits worth keeping in mind
+
+- Raw pointers still require lifetime discipline. Arenas and generational
+  handles do not prevent every use-after-free.
+- Arenas and containers are not implicitly thread-safe. Use separate worker
+  arenas or synchronize shared access.
+- Typed container macros check element sizes, not full C types. Different
+  types of the same size are not distinguished. Plex links also check kind.
+- `CuMap` uses unseeded 32-bit FNV-1a. Deliberate collisions can make a lookup
+  linear in the number of colliding keys. Bound untrusted key counts and memory.
+- `*_FAST` access macros can evaluate arguments more than once. Do not pass
+  expressions with side effects.
+- `cu_arena_set_limit` caps held plus cached block bytes, including headers,
+  not just payload bytes. Check allocation failure when applying a limit.
+
+Define `CU_ARENA_DEBUG`, build with AddressSanitizer, or initialize an arena
+with debug mode enabled to give each push its own allocation. This exposes
+object boundaries and ended scopes to memory tools. `cu_arena_fail_at` and
+`cu_thread_fail_at` inject failures for tests. Growth, caching, and individual
+operation contracts are documented in [cu.h](include/cu.h).
+
+## Tests and platforms
+
+The core targets C89, not a C++ compatibility guarantee. Directory listing
+uses POSIX APIs; threads use pthreads. There is no Windows directory or
+thread backend. WASI and Cerberus have no thread backend, and Cerberus has
+no directory backend. Unsupported initialization returns failure with
+`ENOSYS` where available; errno can be zero on other platforms.
+See [thread design and restrictions](docs/THREADS.md).
+
+Run the ordinary tests with a C compiler and Make. No `dcheck` is required:
+
+```sh
+make test
+```
+
+On older glibc, pass the pthread flag through `CFLAGS`:
+
+```sh
+make test CC=gcc CFLAGS='-g -pthread'
+```
+
+The optional maintainer checks use `dcheck` from the separate
+[dependable-c-agent-toolchain repository](https://github.com/Trav55555/dependable-c-agent-toolchain).
+That repository is currently private. These checks require toolchain access
+and the external tools configured for each check; they are not available
+from a public library checkout alone. With those prerequisites already present,
+set `DCHECK` to your local executable:
+
+```sh
+make check DCHECK=/path/to/dcheck
+make deep DCHECK=/path/to/dcheck
+```
+
+`check` runs the configured subset and lint checks, compiler matrix,
+analyzers, sanitizers, optimized build, WASI checks, and coverage gate.
+`deep` adds Cerberus, Valgrind, fuzzing, and CBMC proofs. These are test
+configurations, not a promise that every platform or input has been proved.
+The string proofs cover inputs up to four bytes; the size-add proof covers
+all inputs. Size multiplication is fuzzed against compiler overflow checks,
+not proved for all 64-bit inputs.
+
+## Further reading
+
+- [Public API and contracts](include/cu.h)
+- [Roadmap](ROADMAP.md)
+- [Performance review and measurements](docs/PERFORMANCE-REVIEW-20261014.md)
+- [Thread design](docs/THREADS.md)
+- [cgrep](https://github.com/Trav55555/cgrep), a consumer of the streaming input API
+- [MIT license](LICENSE)

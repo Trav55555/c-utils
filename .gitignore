@@ -1,3 +1,31 @@
-.dcheck/
-build/
-ci-artifacts/
+# Root outputs only; nested fixtures and documentation remain trackable.
+/.dcheck/
+/build/
+/ci-artifacts/
+
+# Default compiler and README example executables, not their C sources.
+/a.out
+/hello
+/values
+
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.so.[0-9]*
+*.dylib
+*.dll
+
+*.gcda
+*.gcno
+*.gcov
+*.profraw
+*.profdata
+
+__pycache__/
+*.pyc
+*.pyo
+
+# Local permissions only; shared agent configuration stays trackable.
+/.claude/settings.local.json
