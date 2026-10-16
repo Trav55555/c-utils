@@ -1,7 +1,7 @@
 """Fetch pinned Gitea source archives and verify their complete Git trees.
 
-The trusted host runner uses its existing tea login. No credential copies or
-SSH fallback; archive extraction rejects links, traversal, and Git metadata.
+Private CI settings select an existing API login and source repository.
+No credential copies or SSH fallback; extraction rejects unsafe archives.
 """
 import argparse
 import json
@@ -17,15 +17,27 @@ NAMES = ["dependable-c-agent-toolchain"]
 
 def configuration(path):
     config = json.loads(path.read_text())
-    if set(config) != {"schema", *NAMES} or config["schema"] != "c-utils.ci-dependencies/0":
+    if (not isinstance(config, dict) or set(config) != {"schema", *NAMES}
+            or config["schema"] != "c-utils.ci-dependencies/1"):
         raise ValueError("wrong dependency schema or membership")
     for name in NAMES:
         item = config[name]
-        if item["url"] != f"https://git.traversannan.com/trav/{name}.git":
-            raise ValueError("unexpected dependency origin")
-        if any(not re.fullmatch("[0-9a-f]{40}", item[key]) for key in ["revision", "tree"]):
+        if not isinstance(item, dict) or set(item) != {"revision", "tree"}:
+            raise ValueError("dependency entries must contain only revision and tree")
+        if any(not isinstance(item[key], str) or not re.fullmatch("[0-9a-f]{40}", item[key])
+               for key in ["revision", "tree"]):
             raise ValueError("dependency pins must be exact commit/tree hashes")
     return config
+
+
+def private_source(environ):
+    login = environ.get("CUTILS_CI_API_LOGIN", "")
+    repository = environ.get("CUTILS_CI_TOOLCHAIN_REPOSITORY", "")
+    if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*", login):
+        raise ValueError("CUTILS_CI_API_LOGIN must name an explicit configured API login")
+    if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*", repository):
+        raise ValueError("CUTILS_CI_TOOLCHAIN_REPOSITORY must be an owner/repository pair")
+    return login, repository
 
 
 def extract(archive, target, expected_tree):
@@ -80,10 +92,11 @@ def main():
     parser.add_argument("work", type=Path)
     args = parser.parse_args()
     config = configuration(args.config)
+    login, repository = private_source(os.environ)
     for name in NAMES:
         item = config[name]
         archive = args.work / (name + ".tar.gz")
-        subprocess.run(["tea", "api", "--login", "trav", f"/repos/trav/{name}/archive/{item['revision']}.tar.gz",
+        subprocess.run(["tea", "api", "--login", login, f"/repos/{repository}/archive/{item['revision']}.tar.gz",
                         "-o", str(archive)], check=True, timeout=90)
         extract(archive, args.work / name, item["tree"])
         print("PASS Gitea pinned dependency:", name, item["revision"], item["tree"], flush=True)

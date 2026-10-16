@@ -11,9 +11,17 @@ concurrency:
 
 jobs:
   deep:
-    if: github.event_name == 'push' && github.repository == 'trav/c-utils' && github.actor == 'trav'
-    runs-on: cutils-x86_64-3g
+    if: >-
+      github.event_name == 'push' &&
+      vars.CUTILS_CI_REPOSITORY != '' &&
+      vars.CUTILS_CI_ACTOR != '' &&
+      github.repository == vars.CUTILS_CI_REPOSITORY &&
+      github.actor == vars.CUTILS_CI_ACTOR
+    runs-on: ${{ vars.CUTILS_CI_RUNNER }}
     timeout-minutes: 45
+    env:
+      CUTILS_CI_API_LOGIN: ${{ vars.CUTILS_CI_API_LOGIN }}
+      CUTILS_CI_TOOLCHAIN_REPOSITORY: ${{ vars.CUTILS_CI_TOOLCHAIN_REPOSITORY }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:

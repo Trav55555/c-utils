@@ -233,9 +233,8 @@ On older glibc, pass the pthread flag through `CFLAGS`:
 make test CC=gcc CFLAGS='-g -pthread'
 ```
 
-The optional maintainer checks use `dcheck` from the separate
-[dependable-c-agent-toolchain repository](https://github.com/Trav55555/dependable-c-agent-toolchain).
-That repository is currently private. These checks require toolchain access
+The optional maintainer checks use a separate, private `dcheck` toolchain.
+These checks require toolchain access
 and the external tools configured for each check; they are not available
 from a public library checkout alone. With those prerequisites already present,
 set `DCHECK` to your local executable:
