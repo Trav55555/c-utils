@@ -2,7 +2,7 @@
   "schema": "c-utils.ci-dependencies/0",
   "dependable-c-agent-toolchain": {
     "url": "https://git.traversannan.com/trav/dependable-c-agent-toolchain.git",
-    "revision": "621b5cb7d352c9ab1c5e01822ead072c214d3fce",
-    "tree": "d6f1fc5dfe56fffefdafdf47ec4ec9b1ef0d1163"
+    "revision": "aa77dd5c2ed77330797885b012d001e56d6604f6",
+    "tree": "ca4cafccdd767e7c8caf54996086920aef9c3623"
   }
 }

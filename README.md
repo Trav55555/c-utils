@@ -146,6 +146,20 @@ for one), `cu_dir_open` fails with `ENOSYS`. Builds that include a system
 header before `src/cu_dir.c` need `_DEFAULT_SOURCE` defined, as
 `dcheck.conf` does.
 
+## Threads
+
+`cu_thread_start` runs a function on a new thread, with a stack size (0
+for the platform default), and `cu_thread_join` waits for it; there is no
+detach. `CuMutex` and `CuCond` (broadcast only) are opaque objects held in
+the caller's arena, so `cu.h` names no platform type; join and destroy
+them before releasing it. Starting and initialising return 0 with errno
+(ENOSYS where there are no threads, as on wasm32-wasi and Cerberus, so
+callers keep a serial path); detected misuse and platform-reported errors
+abort. Mutex ownership rules remain the caller's responsibility.
+`cu_thread_fail_at(n)` makes the nth start or init fail, for tests. Each
+thread releases its scratch arenas when its function returns. Design:
+[docs/THREADS.md](docs/THREADS.md).
+
 ## Checks
 
 ```sh

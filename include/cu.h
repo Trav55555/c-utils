@@ -778,4 +778,61 @@ void cu_dir_close(CuDir *d);
 /** regions: borrows */
 int cu_dir_errno(const CuDir *d);
 
+/* ---- Threads -----------------------------------------------------------
+ *
+ * Start and join, a mutex and a condition variable, as opaque objects
+ * pushed into the caller's arena: they never move, and the arena frees
+ * them, so join a thread and destroy a mutex or condition before releasing
+ * it. Starting and initialising can fail for real reasons and return 0
+ * with errno saved: ENOSYS where the platform has no threads (wasm32-wasi,
+ * Cerberus), EAGAIN when the system refuses, ENOMEM when the arena does.
+ * Failure leaves the output pointer unchanged, but may consume arena
+ * space. Join, lock, unlock, wait, broadcast and destroy abort on platform
+ * errors or detected misuse, including joining twice or using a destroyed
+ * object. Mutex ownership is not checked: do not lock recursively, unlock
+ * or wait without ownership, or destroy an object still in use. There is
+ * no detach: every started thread is joined. Pthreads live in libc on
+ * glibc 2.34+ and musl; older glibc needs -pthread. See docs/THREADS.md. */
+typedef struct CuThread CuThread;
+typedef struct CuMutex CuMutex;
+typedef struct CuCond CuCond;
+
+/* Runs fn(context) on a new thread, then releases that thread's scratch
+ * arenas. stack_size 0 means the platform default; one below the platform
+ * minimum fails with EINVAL. The record that names the thread stays in a
+ * until the arena is released. No regions contract: a value from a temp or
+ * scratch scope passed as context is reported, never assumed safe. */
+CU_MUST_USE int cu_thread_start(CuThread **t, CuArena *a, size_t stack_size, void (*fn)(void *),
+                                void *context);
+/** regions: borrows */
+void cu_thread_join(CuThread *t);
+
+/** regions: writes *m alloc(a) */
+CU_MUST_USE int cu_mutex_init(CuMutex **m, CuArena *a);
+/** regions: borrows */
+void cu_mutex_lock(CuMutex *m);
+/** regions: borrows */
+void cu_mutex_unlock(CuMutex *m);
+/** regions: borrows */
+void cu_mutex_destroy(CuMutex *m);
+
+/** regions: writes *c alloc(a) */
+CU_MUST_USE int cu_cond_init(CuCond **c, CuArena *a);
+/* Releases m, which the caller holds, and waits for a broadcast; holds m
+ * again on return. Wakeups can be spurious: wait in a loop on a condition. */
+/** regions: borrows */
+void cu_cond_wait(CuCond *c, CuMutex *m);
+/** regions: borrows */
+void cu_cond_broadcast(CuCond *c);
+/** regions: borrows */
+void cu_cond_destroy(CuCond *c);
+
+/* Test hook, as cu_arena_fail_at: start and init attempt n, counting from
+ * 0 since this call, fails with EAGAIN and every other one succeeds.
+ * (size_t)-1, the default, fails none. The count is process-wide: set it
+ * only while no start or init is in progress. While enabled, make all
+ * start and init attempts from one thread; disabled, they may run
+ * concurrently on separate arenas. */
+void cu_thread_fail_at(size_t n);
+
 #endif

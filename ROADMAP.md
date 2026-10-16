@@ -16,7 +16,7 @@ Done: **a first consumer.** cgrep (`~/projects/cgrep`, CI-pinned to a c-utils re
 Next, in order:
 
 1. **`regions` check.** Static check for arena lifetime bugs (design: `dependable-c-agent-toolchain/docs/REGIONS.md`). This repo and cgrep are its first real targets.
-2. **Threads**, moving cgrep's worker pool here.
+2. **Threads: cgrep onto them.** Slice 1 (start and join, mutex, condition, fault seam) is implemented ([design](docs/THREADS.md)); cgrep moves its pool's plumbing onto it next, then a work queue if a second user wants one.
 
 ## 2. Platform module
 
