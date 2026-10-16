@@ -16,13 +16,13 @@ Done: **a first consumer.** cgrep (`~/projects/cgrep`, CI-pinned to a c-utils re
 Next, in order:
 
 1. **`regions` check.** Static check for arena lifetime bugs (design: `dependable-c-agent-toolchain/docs/REGIONS.md`). This repo and cgrep are its first real targets.
-2. **The next platform slice**, chosen between threads (moving cgrep's worker pool here) and a directory walk (which cgrep needs before it can search directories).
+2. **Threads**, moving cgrep's worker pool here.
 
 ## 2. Platform module
 
 The only code allowed to touch the OS. Everything above it stays portable C89.
 
-- Files: read whole file into an arena, buffered reader/writer, directory walking.
+- Files: read whole file into an arena, buffered reader/writer, directory walking. Done: whole-file and stream reads, chunked input (`CuInput`), and listing one directory (`CuDir`). A recursive walk waits until cgrep, which recurses on `CuDir` itself, shows what it needs.
 - Threads: start/join, mutex, condition variable, a work queue (see `dependable-c-agent-toolchain/docs/CONCURRENCY.md`). Shared flags and pointers use atomics with acquire/release ordering (C11 `<stdatomic.h>` or compiler builtins, wrapped here), never `volatile`: `volatile` stops the compiler eliding accesses but gives neither atomicity nor ordering.
 - Time, environment, process exit codes. Effects are visible to Ward's `authority` check.
 

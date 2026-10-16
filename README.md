@@ -115,6 +115,37 @@ or copying storage. Reads after successful close abort.
 The first consumer is the streaming literal-search slice of
 [cgrep](../cgrep/README.md).
 
+## Directories
+
+`CuDir` lists one directory: each entry once, in no particular order,
+without `.` and `..`. Each entry has a name, copied into the arena with a
+NUL after it, and a kind: file, directory, link (never followed), or other.
+A walker keeps memory bounded by opening a temp scope per directory:
+
+```c
+CuTemp t;
+CuDir dir;
+CuDirEntry e;
+int r;
+
+t = cu_temp_begin(&arena);
+if (cu_dir_open(&dir, &arena, path)) {
+    while ((r = cu_dir_next(&dir, &e)) == 1) {
+        /* Keep e.name; it lives until cu_temp_end(t). */
+    }
+    cu_dir_close(&dir);
+    if (r < 0) {
+        /* Inspect cu_dir_errno(&dir); 0 means memory ran out. */
+    }
+}
+cu_temp_end(t);
+```
+
+Errors are sticky. Where the platform has no POSIX directories (Cerberus,
+for one), `cu_dir_open` fails with `ENOSYS`. Builds that include a system
+header before `src/cu_dir.c` need `_DEFAULT_SOURCE` defined, as
+`dcheck.conf` does.
+
 ## Checks
 
 ```sh

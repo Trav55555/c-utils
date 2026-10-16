@@ -723,4 +723,55 @@ CU_MUST_USE int cu_input_close(CuInput *in);
 /** regions: borrows */
 int cu_input_errno(const CuInput *in);
 
+/* ---- Directories ------------------------------------------------------
+ *
+ * One directory's entries, in no particular order, each exactly once, "."
+ * and ".." skipped. A symbolic link is reported as CU_DIR_LINK and never
+ * followed. The kind comes from the directory entry when the file system
+ * records it, else from lstat-style status of the entry itself.
+ *
+ * Each name is copied into the arena given to cu_dir_open, in whatever
+ * scope is innermost when cu_dir_next runs, so names outlive the listing.
+ * A walker that opens a temp scope per directory, lists and sorts its
+ * names, descends, then ends the scope holds memory bounded by depth times
+ * directory size; a long-lived arena accumulates every name instead.
+ *
+ * Errors are sticky, as for CuInput: after one, cu_dir_next keeps
+ * returning -1, and cu_dir_errno gives the saved errno (0 when memory ran
+ * out, with the arena marked failed). Where the platform has no POSIX
+ * directories, cu_dir_open fails with ENOSYS. NULL arguments abort. */
+typedef enum {
+    CU_DIR_FILE,
+    CU_DIR_DIR,
+    CU_DIR_LINK,
+    CU_DIR_OTHER
+} CuDirKind;
+
+typedef struct CuDirEntry {
+    CuStr name; /* NUL-terminated after len bytes, so name.ptr is a C string */
+    CuDirKind kind;
+} CuDirEntry;
+
+typedef struct CuDir {
+    void *handle; /* the platform's directory stream, or NULL */
+    CuArena *arena;
+    int state;    /* 1 listing, 0 closed, -1 failed */
+    int error;    /* saved errno; zero is possible on error */
+} CuDir;
+
+/* Returns 1, or 0 with the errno saved (the CuDir is then closed and
+ * cu_dir_next returns -1). */
+/** regions: binds d to a */
+CU_MUST_USE int cu_dir_open(CuDir *d, CuArena *a, const char *path);
+/* Stores the next entry in *e and returns 1, returns 0 at the end, or -1
+ * on an error, leaving *e unchanged for 0 and -1. Calls after cu_dir_close
+ * abort. */
+/** regions: allocates in d; writes *e view(*d) */
+int cu_dir_next(CuDir *d, CuDirEntry *e);
+/* Releases the stream. Idempotent; names already returned stay valid. */
+/** regions: borrows */
+void cu_dir_close(CuDir *d);
+/** regions: borrows */
+int cu_dir_errno(const CuDir *d);
+
 #endif
