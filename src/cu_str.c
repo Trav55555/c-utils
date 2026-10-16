@@ -203,10 +203,13 @@ static int two_way(const unsigned char *y, size_t n, const unsigned char *x, siz
 }
 
 /* memchr for the needle's first byte, then memcmp: fast on ordinary text.
- * Each candidate costs at most needle.len compares, so when candidates
- * come too often (cand / 8 > i / needle.len, about cand * needle.len >
- * 8 * i) the rest of the search switches to Two-Way, keeping the whole
- * search linear on any input. */
+ * Two-Way takes over for the rest of the search when candidates come more
+ * than once per 2 bytes, since each costs about as much as two bytes of
+ * Two-Way (measured on x86_64), or when they could have cost more than 32
+ * compares per byte scanned (cand / 32 > i / needle.len): each costs at
+ * most needle.len compares, so the whole search stays linear. The second
+ * test is loose because candidates in random text fail after a byte or
+ * two; Two-Way is slower than memchr there (DNA-like input). */
 int cu_str_find(CuStr s, CuStr needle, size_t *at)
 {
     size_t i;
@@ -236,7 +239,7 @@ int cu_str_find(CuStr s, CuStr needle, size_t *at)
         }
         i++;
         cand++;
-        if (cand > 16 && cand / 8 > i / needle.len)
+        if (cand > 16 && (cand * 2 > i || cand / 32 > i / needle.len))
             return two_way((const unsigned char *)s.ptr, s.len, (const unsigned char *)needle.ptr,
                            needle.len, i, at);
     }

@@ -115,7 +115,7 @@ static unsigned rng(unsigned n)
 /* Haystacks that start with a long run of the needle's first byte, or of
  * its first few bytes, make nearly every position a candidate: enough to
  * switch to the linear-time search, which then must agree with brute
- * force over the rest, for needles periodic or not. */
+ * force over the rest, for needles periodic or not, short ones included. */
 static void test_find_on_adversarial_input(void)
 {
     static const char alphabet[] = "aab";
@@ -131,7 +131,7 @@ static void test_find_on_adversarial_input(void)
     int round;
 
     for (round = 0; round < 80; round++) {
-        m = 9 + rng(14);
+        m = 2 + rng(21);
         needle[0] = 'a';
         for (k = 1; k < m; k++)
             needle[k] = alphabet[rng(round % 3 == 0 ? 3 : 2)];
@@ -166,6 +166,10 @@ static void test_find_on_adversarial_input(void)
              "aaaaabaaaaa");
     /* The last candidate fails: the loop ends without memchr failing. */
     hay_case("ab", "ac");
+    /* Dense candidates send two-byte needles to Two-Way too. */
+    hay_case("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab", "ab");
+    hay_case("abababababababababababababababababababababac", "ac");
+    hay_case("abababababababababababababababababababababab", "ac");
 }
 
 static void test_cut(void)
