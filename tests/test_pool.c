@@ -1,6 +1,7 @@
 #include "death.h"
 #include <assert.h>
 #include "cu.h"
+#include "align.h"
 
 static void test_add_get_remove(CuArena *a)
 {
@@ -195,7 +196,7 @@ static void test_layout(void)
         h = CU_POOL_ADD(&p, &o);
         got = CU_POOL_GET(&p, Obj, h);
         assert(got != NULL && got->a == (long)i && got->d[2] > 2.0);
-        assert((size_t)got % sizeof(double) == 0 && (size_t)got % sizeof(long) == 0);
+        assert(is_max_aligned(got));
     }
     /* Debug mode holds exactly what is pushed. Under 1.65 times the
      * objects' bytes; separate header and value arrays took over 1.75. */

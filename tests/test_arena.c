@@ -2,13 +2,9 @@
 #include <assert.h>
 #include <string.h>
 #include "cu.h"
+#include "align.h"
 
 /* Runs each arena test in both modes: shared blocks (0) and one malloc per push (1). */
-
-static int is_aligned(const void *p)
-{
-    return (size_t)p % sizeof(double) == 0 && (size_t)p % sizeof(void *) == 0;
-}
 
 static void test_pushes_are_separate_and_aligned(int debug)
 {
@@ -23,7 +19,7 @@ static void test_pushes_are_separate_and_aligned(int debug)
     ds = CU_PUSH(&a, double, 4);
     ls = CU_PUSH(&a, long, 100);
     assert(bytes != NULL && ds != NULL && ls != NULL);
-    assert(is_aligned(ds) && is_aligned(ls));
+    assert(is_max_aligned(ds) && is_max_aligned(ls));
     memset(bytes, 'x', 3);
     for (i = 0; i < 4; i++)
         ds[i] = (double)i;
@@ -361,12 +357,12 @@ static void test_grow_moves_when_not_newest(int debug)
     fill_pattern(p, 16);
     memcpy(later, "keep", 4);
     q = (char *)cu_arena_grow(&a, p, 16, 24);
-    assert(q != NULL && q != p && is_aligned(q));
+    assert(q != NULL && q != p && is_max_aligned(q));
     assert(has_pattern(q, 16) && has_pattern(p, 16));
     assert(memcmp(later, "keep", 4) == 0);
     /* NULL with old size 0 is a plain push. */
     q = (char *)cu_arena_grow(&a, NULL, 0, 8);
-    assert(q != NULL && is_aligned(q));
+    assert(q != NULL && is_max_aligned(q));
     assert(!cu_arena_failed(&a));
     cu_arena_release(&a);
 }

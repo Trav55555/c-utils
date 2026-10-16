@@ -2,6 +2,7 @@
 #include <assert.h>
 #include <string.h>
 #include "cu.h"
+#include "align.h"
 
 /* Published FNV-1a 32-bit test vectors. */
 static void test_hash_vectors(void)
@@ -180,7 +181,7 @@ static void test_one_allocation_per_entry(void)
     for (i = 0; i < 7; i++) {
         memset(key, 'k', i + 1);
         v = CU_MAP_UPSERT(&m, double, cu_str_n(key, i + 1), &init);
-        assert(v != NULL && (size_t)v % sizeof(double) == 0 && (size_t)v % sizeof(void *) == 0);
+        assert(v != NULL && is_max_aligned(v));
     }
     assert(*CU_MAP_GET(&m, double, CU_LIT("kkk")) > 0.25);
     cu_arena_release(&a);

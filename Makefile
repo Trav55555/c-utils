@@ -15,7 +15,7 @@ deep:
 test: $(TESTS)
 	@for t in $(TESTS); do echo "$$t"; "$$t" || exit 1; done
 
-$(BUILD)/test_%: tests/test_%.c tests/death.h include/cu.h $(wildcard src/*.c) | $(BUILD)
+$(BUILD)/test_%: tests/test_%.c tests/death.h tests/align.h include/cu.h $(wildcard src/*.c) | $(BUILD)
 	$(CC) $(STRICT) $(CFLAGS) -Iinclude -o $@ $< $(wildcard src/*.c)
 
 $(BUILD):
