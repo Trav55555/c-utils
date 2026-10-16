@@ -1,2 +1,3 @@
 .dcheck/
 build/
+ci-artifacts/
