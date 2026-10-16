@@ -304,6 +304,7 @@ typedef struct CuBuilder {
     size_t cap;
     size_t scope;
     int failed;
+    int shared; /* a view from cu_sb_finish may point into data */
 } CuBuilder;
 
 /** regions: binds b to a */
@@ -322,8 +323,11 @@ void cu_sb_hex(CuBuilder *b, unsigned long v, size_t min_digits);
 /* Stores the built string in *out and returns 1, or stores the empty string
  * and returns 0 if any append failed. The view stays valid while the
  * builder keeps growing (until its scope ends or the arena is released):
- * a builder grows in place or into a new buffer, leaving the old bytes
- * where they were, so it can also append its own finished contents. */
+ * after a finish, a builder grows in place or into a new buffer, leaving
+ * the old bytes where they were, so it can also append its own finished
+ * contents. Until the first finish, and again after such a move, growth
+ * may reallocate (cu_arena_grow), so a pointer taken from the data field
+ * is valid only until the next append. */
 /** regions: writes *out view(*b) */
 CU_MUST_USE int cu_sb_finish(CuBuilder *b, CuStr *out);
 

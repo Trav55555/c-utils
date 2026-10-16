@@ -86,6 +86,7 @@ void cu_sb_init(CuBuilder *b, CuArena *a)
     b->cap = 0;
     b->scope = cu_arena_scope(a);
     b->failed = 0;
+    b->shared = 0;
 }
 
 /* Every append starts here. Growing under any scope but the builder's own
@@ -117,34 +118,61 @@ static char *reserve(CuBuilder *b, size_t n)
                 break;
             }
         }
-        /* In place, or a new buffer and a copy; never a realloc, so views
-         * from cu_sb_finish and appends of the builder's own bytes stay
-         * valid. */
-        if (b->data == NULL || !cu_arena_extend(b->arena, b->data, b->cap, cap)) {
+        /* While no finished view points into the buffer, cu_arena_grow may
+         * reallocate it. Once one may, it only grows in place, or moves to
+         * a new buffer and leaves the old bytes for the view; the new
+         * buffer has no views yet. */
+        if (b->data != NULL && !b->shared) {
+            data = (char *)cu_arena_grow(b->arena, b->data, b->cap, cap);
+        } else if (b->data != NULL && cu_arena_extend(b->arena, b->data, b->cap, cap)) {
+            data = b->data;
+        } else {
             data = cu_arena_push_bytes(b->arena, cap);
-            if (data == NULL) {
-                b->failed = 1;
-                return NULL;
-            }
-            if (b->len != 0)
+            if (data != NULL && b->len != 0)
                 memcpy(data, b->data, b->len);
-            b->data = data;
+            b->shared = 0;
         }
+        if (data == NULL) {
+            b->failed = 1;
+            return NULL;
+        }
+        b->data = data;
         b->cap = cap;
     }
     return b->data + b->len;
 }
 
+/* Where src starts in the builder's bytes, or (size_t)-1. Pointers into
+ * different objects cannot be ordered, so each byte is tried; a growth
+ * that needs this already copies as many bytes. */
+static size_t offset_in(const CuBuilder *b, const char *src)
+{
+    size_t k;
+
+    for (k = 0; k < b->len; k++) {
+        if (src == b->data + k)
+            return k;
+    }
+    return (size_t)-1;
+}
+
 static void append(CuBuilder *b, const char *src, size_t n)
 {
     char *dst;
+    size_t off;
 
     check_builder(b);
     if (n == 0)
         return;
+    /* A reallocating growth may free src if it is the builder's own. */
+    off = (size_t)-1;
+    if (!b->failed && !b->shared && b->data != NULL && n > b->cap - b->len)
+        off = offset_in(b, src);
     dst = reserve(b, n);
     if (dst == NULL)
         return;
+    if (off != (size_t)-1)
+        src = b->data + off;
     memcpy(dst, src, n);
     b->len += n;
 }
@@ -267,5 +295,6 @@ int cu_sb_finish(CuBuilder *b, CuStr *out)
         return 0;
     }
     *out = cu_str_n(b->data, b->len);
+    b->shared = b->data != NULL;
     return 1;
 }

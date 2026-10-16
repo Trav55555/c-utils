@@ -456,6 +456,78 @@ static void death_tests(void)
 }
 #endif
 
+/* Until cu_sb_finish hands out a view, nothing can point into the
+ * builder's buffer, so growth past its block reallocates instead of
+ * leaving every outgrown copy behind: the arena holds less than twice the
+ * contents (doubling) plus a block, not about 3.4 times. */
+static void test_unshared_growth_leaves_nothing_behind(void)
+{
+    CuArena a;
+    CuBuilder b;
+    CuStr out;
+    size_t n;
+    size_t i;
+
+    /* Just past a power of two: the worst case for doubling. */
+    n = (1u << 20) + 1;
+    cu_arena_init_with(&a, 65536, 0);
+    cu_sb_init(&b, &a);
+    for (i = 0; i < n; i++)
+        cu_sb_char(&b, (char)('a' + i % 26));
+    assert(cu_sb_finish(&b, &out) && out.len == n);
+    for (i = 0; i < n; i += 4099)
+        assert(out.ptr[i] == (char)('a' + i % 26));
+    assert(a.held < 2 * n + 65536);
+    cu_arena_release(&a);
+}
+
+/* After a finish, the next growth copies, so the view survives; the copy
+ * has no views yet, so later growth reallocates again. */
+static void test_growth_after_finish(int debug)
+{
+    CuArena a;
+    CuBuilder b;
+    CuStr first;
+    CuStr out;
+    size_t i;
+
+    cu_arena_init_with(&a, 64, debug);
+    cu_sb_init(&b, &a);
+    for (i = 0; i < 100; i++)
+        cu_sb_char(&b, 'p');
+    assert(cu_sb_finish(&b, &first) && first.len == 100);
+    for (i = 0; i < 5000; i++)
+        cu_sb_char(&b, (char)('0' + i % 10));
+    assert(cu_sb_finish(&b, &out) && out.len == 5100);
+    for (i = 0; i < 100; i++)
+        assert(first.ptr[i] == 'p' && out.ptr[i] == 'p');
+    for (i = 0; i < 5000; i++)
+        assert(out.ptr[100 + i] == (char)('0' + i % 10));
+    assert(!cu_arena_failed(&a));
+    cu_arena_release(&a);
+}
+
+/* Appending the builder's own bytes, read straight from its data field
+ * with no finish, survives a growth that reallocates the buffer. */
+static void test_unshared_self_append(int debug)
+{
+    CuArena a;
+    CuBuilder b;
+    CuStr out;
+    size_t i;
+    int round;
+
+    cu_arena_init_with(&a, 64, debug);
+    cu_sb_init(&b, &a);
+    cu_sb_str(&b, CU_LIT("ab"));
+    for (round = 0; round < 12; round++)
+        cu_sb_str(&b, cu_str_n(b.data, b.len));
+    assert(cu_sb_finish(&b, &out) && out.len == (size_t)2 << 12);
+    for (i = 0; i < out.len; i++)
+        assert(out.ptr[i] == (i % 2 ? 'b' : 'a'));
+    cu_arena_release(&a);
+}
+
 int main(void)
 {
     CuArena a;
@@ -470,6 +542,8 @@ int main(void)
         test_append_fails_at_every_allocation(debug);
         test_hex_padding(debug);
         test_finished_views_survive_growth(debug);
+        test_growth_after_finish(debug);
+        test_unshared_self_append(debug);
         test_parse_ulong(&a);
         test_parse_long(&a);
         assert(cu_arena_failed(&a) == 0);
@@ -477,6 +551,7 @@ int main(void)
     }
     test_formats_match_reference();
     test_growth_in_place();
+    test_unshared_growth_leaves_nothing_behind();
     test_parse_ulong_bounds();
 #ifdef CU_DEATH_TESTS
     death_tests();
