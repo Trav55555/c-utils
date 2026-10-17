@@ -228,6 +228,19 @@ static void u32be_too_large(void)
     write_value(cu_sb_u32be, two_to_32());
 }
 
+static void u64_bad_half(void)
+{
+    CuArena a;
+    CuBuilder b;
+    CuU64 bad;
+
+    bad.hi = two_to_32();
+    bad.lo = 0;
+    cu_arena_init(&a);
+    cu_sb_init(&b, &a);
+    cu_sb_u64be(&b, bad);
+}
+
 /* Contract violations abort. */
 static void death_tests(void)
 {
@@ -237,9 +250,51 @@ static void death_tests(void)
     if (two_to_32() != 0) {
         expect_abort(u32le_too_large);
         expect_abort(u32be_too_large);
+        expect_abort(u64_bad_half);
     }
 }
 #endif
+
+/* 64-bit values: halves in the right order, high bytes unsigned, short
+ * input failing unchanged, and every value reading back. */
+static void test_u64(CuArena *a)
+{
+    static const char bytes8[] = "\x01\x02\x03\x04\x05\x06\x07\x08\x09";
+    CuBuilder b;
+    CuStr s;
+    CuStr out;
+    CuU64 v;
+    size_t pos;
+
+    s = cu_str_n(bytes8, 9);
+    pos = 0;
+    assert(cu_rd_u64be(s, &pos, &v) && pos == 8);
+    assert(v.hi == 0x01020304UL && v.lo == 0x05060708UL);
+    pos = 1;
+    assert(cu_rd_u64le(s, &pos, &v) && pos == 9);
+    assert(v.hi == 0x09080706UL && v.lo == 0x05040302UL);
+    s = cu_str_n("\xff\xff\xff\xff\xff\xff\xff\x80", 8);
+    pos = 0;
+    assert(cu_rd_u64le(s, &pos, &v) && v.hi == 0x80FFFFFFUL && v.lo == 0xFFFFFFFFUL);
+    v = cu_u64(9UL, 9UL);
+    pos = 1;
+    assert(!cu_rd_u64be(s, &pos, &v) && pos == 1 && v.hi == 9UL && v.lo == 9UL);
+    pos = 9;
+    assert(!cu_rd_u64le(s, &pos, &v) && pos == 9 && v.hi == 9UL && v.lo == 9UL);
+
+    cu_sb_init(&b, a);
+    cu_sb_u64be(&b, cu_u64(0x01020304UL, 0x05060708UL));
+    cu_sb_u64le(&b, cu_u64(0x01020304UL, 0x05060708UL));
+    cu_sb_u64be(&b, cu_u64(0xFFFFFFFFUL, 0UL));
+    assert(cu_sb_finish(&b, &out) && out.len == 24);
+    assert(memcmp(out.ptr,
+                  "\x01\x02\x03\x04\x05\x06\x07\x08"
+                  "\x08\x07\x06\x05\x04\x03\x02\x01"
+                  "\xff\xff\xff\xff\x00\x00\x00\x00",
+                  24) == 0);
+    pos = 16;
+    assert(cu_rd_u64be(out, &pos, &v) && v.hi == 0xFFFFFFFFUL && v.lo == 0UL);
+}
 
 int main(void)
 {
@@ -252,6 +307,7 @@ int main(void)
     test_read_bytes();
     test_writes_exact_bytes(&a);
     test_round_trip(&a);
+    test_u64(&a);
     cu_arena_release(&a);
 #ifdef CU_DEATH_TESTS
     death_tests();

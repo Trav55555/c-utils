@@ -156,3 +156,52 @@ void cu_sb_u32be(CuBuilder *b, unsigned long v)
 {
     write_be(b, v, 4);
 }
+
+/* The 32-bit value of four bytes at p, in either order. */
+static unsigned long get32(const unsigned char *p, int big)
+{
+    if (big)
+        return (unsigned long)p[0] << 24 | (unsigned long)p[1] << 16 | (unsigned long)p[2] << 8 |
+               (unsigned long)p[3];
+    return (unsigned long)p[0] | (unsigned long)p[1] << 8 | (unsigned long)p[2] << 16 |
+           (unsigned long)p[3] << 24;
+}
+
+/* The high half comes first in big-endian order and last in little-endian. */
+static int read_u64(CuStr s, size_t *pos, CuU64 *out, int big)
+{
+    const unsigned char *p;
+
+    if (out == NULL)
+        abort();
+    p = take(s, pos, 8);
+    if (p == NULL)
+        return 0;
+    if (big)
+        *out = cu_u64(get32(p, 1), get32(p + 4, 1));
+    else
+        *out = cu_u64(get32(p + 4, 0), get32(p, 0));
+    return 1;
+}
+
+int cu_rd_u64le(CuStr s, size_t *pos, CuU64 *out)
+{
+    return read_u64(s, pos, out, 0);
+}
+
+int cu_rd_u64be(CuStr s, size_t *pos, CuU64 *out)
+{
+    return read_u64(s, pos, out, 1);
+}
+
+void cu_sb_u64le(CuBuilder *b, CuU64 v)
+{
+    write_le(b, v.lo, 4);
+    write_le(b, v.hi, 4);
+}
+
+void cu_sb_u64be(CuBuilder *b, CuU64 v)
+{
+    write_be(b, v.hi, 4);
+    write_be(b, v.lo, 4);
+}

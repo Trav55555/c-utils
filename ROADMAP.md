@@ -2,9 +2,11 @@
 
 Each item is one slice that passes `make check` (and `make deep` before it is called done), with tests written first. Later layers only use the layers below them.
 
+For consideration: [VM writer lessons](docs/VM-WRITER-CONSIDERATIONS-20261017.md) reviews escaped views, failure injection, handle limits, and the boundary between library mechanisms and consumer policy. It adds no approved slice and does not change the order below.
+
 ## 1. Core (this repo)
 
-Done: arena + temp scopes + scratch arenas, debug arena mode, checked size math, `CuStr`, ASCII, parsing, string builder, `CuVec`, `CuSlice`, `CuMap` hash trie, `CuPool` with generational handles, `CuPlex` typed links, byte readers and writers (8, 16 and 32 bits, both byte orders). 64-bit readers wait for a 64-bit type: C89 has none, and `unsigned long` is 32 bits on Windows and wasm32. Typed slice wrappers (`CuSliceLong` and so on) wait for a caller that needs more than `CU_SLICE_AT`. `CuMap` hashes with 32-bit FNV-1a, unseeded, so colliding keys are easy to construct and cost O(n) each; a seeded or 64-bit hash waits for a use with untrusted keys.
+Done: arena + temp scopes + scratch arenas, debug arena mode, checked size math, `CuStr`, ASCII, parsing, string builder, `CuVec`, `CuSlice`, `CuMap` hash trie, `CuPool` with generational handles, `CuPlex` typed links, byte readers and writers (8, 16 and 32 bits, both byte orders). `CuU64` stands in for a 64-bit type, which C89 lacks (and `unsigned long` is 32 bits on Windows and wasm32): two 32-bit halves with checked add, subtract and compare, `size_t` conversions, and 64-bit readers and writers. Multiplication, division and decimal formatting wait for a caller; the first is the git server in `~/projects/git-server-agents`. Typed slice wrappers (`CuSliceLong` and so on) wait for a caller that needs more than `CU_SLICE_AT`. `CuMap` hashes with 32-bit FNV-1a, unseeded, so colliding keys are easy to construct and cost O(n) each; a seeded or 64-bit hash waits for a use with untrusted keys.
 
 Temp scopes carry ids, so ending one out of order or twice aborts, and each container aborts when grown under a scope other than the one it was made in. The `regions` check below is the static version of that runtime check.
 

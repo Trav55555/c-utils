@@ -50,6 +50,38 @@ CU_MUST_USE int cu_size_add(size_t a, size_t b, size_t *out);
 /** regions: borrows */
 CU_MUST_USE int cu_size_mul(size_t a, size_t b, size_t *out);
 
+/* ---- 64-bit unsigned integers ------------------------------------------ */
+
+/* C89 has no 64-bit type, and long is 32 bits on Windows and wasm32, so a
+ * CuU64 is two 32-bit halves: the value is hi * 2^32 + lo. Each half must
+ * be at most 0xFFFFFFFF; every function aborts when given a half that is
+ * not. Arithmetic is checked: overflow returns 0 and leaves *out
+ * unchanged, as for cu_size_add. */
+typedef struct CuU64 {
+    unsigned long hi;
+    unsigned long lo;
+} CuU64;
+
+/** regions: borrows */
+CuU64 cu_u64(unsigned long hi, unsigned long lo);
+/* Any unsigned long or size_t, including one wider than 32 bits. A value
+ * that needs more than 64 bits aborts. */
+/** regions: borrows */
+CuU64 cu_u64_from_ulong(unsigned long v);
+/** regions: borrows */
+CuU64 cu_u64_from_size(size_t v);
+/* Store v in *out and return 1, or return 0 if it does not fit size_t. */
+/** regions: borrows */
+CU_MUST_USE int cu_u64_to_size(CuU64 v, size_t *out);
+/* Negative, zero or positive as a is less than, equal to or greater than b. */
+/** regions: borrows */
+int cu_u64_cmp(CuU64 a, CuU64 b);
+/* a + b, failing past 2^64 - 1; a - b, failing when b > a. */
+/** regions: borrows */
+CU_MUST_USE int cu_u64_add(CuU64 a, CuU64 b, CuU64 *out);
+/** regions: borrows */
+CU_MUST_USE int cu_u64_sub(CuU64 a, CuU64 b, CuU64 *out);
+
 /* ---- Arena ------------------------------------------------------------- */
 
 typedef struct CuBlock CuBlock;
@@ -349,6 +381,11 @@ CU_MUST_USE int cu_rd_u16be(CuStr s, size_t *pos, unsigned long *out);
 CU_MUST_USE int cu_rd_u32le(CuStr s, size_t *pos, unsigned long *out);
 /** regions: borrows */
 CU_MUST_USE int cu_rd_u32be(CuStr s, size_t *pos, unsigned long *out);
+/* 64-bit readers store a CuU64 under the same rules. */
+/** regions: borrows */
+CU_MUST_USE int cu_rd_u64le(CuStr s, size_t *pos, CuU64 *out);
+/** regions: borrows */
+CU_MUST_USE int cu_rd_u64be(CuStr s, size_t *pos, CuU64 *out);
 /* The next n bytes as a view into s, under the same rules. */
 /** regions: writes *out view(s) */
 CU_MUST_USE int cu_rd_bytes(CuStr s, size_t *pos, size_t n, CuStr *out);
@@ -365,6 +402,11 @@ void cu_sb_u16be(CuBuilder *b, unsigned long v);
 void cu_sb_u32le(CuBuilder *b, unsigned long v);
 /** regions: allocates in b */
 void cu_sb_u32be(CuBuilder *b, unsigned long v);
+/* A CuU64 with a half over 0xFFFFFFFF aborts. */
+/** regions: allocates in b */
+void cu_sb_u64le(CuBuilder *b, CuU64 v);
+/** regions: allocates in b */
+void cu_sb_u64be(CuBuilder *b, CuU64 v);
 
 /* ---- Growable array ---------------------------------------------------- */
 
