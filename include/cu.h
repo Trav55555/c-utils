@@ -408,6 +408,32 @@ void cu_sb_u64le(CuBuilder *b, CuU64 v);
 /** regions: allocates in b */
 void cu_sb_u64be(CuBuilder *b, CuU64 v);
 
+/* ---- SHA-256 ----------------------------------------------------------- */
+
+/* FIPS 180-4 SHA-256 for content addressing. Not hardened against timing
+ * side channels: hash public content, not secrets, and do not build MACs
+ * or password hashes on it. Feed any number of updates between init and
+ * final; final writes the 32-byte digest and finishes the hasher, and a
+ * further update or final aborts until the next init. A message of 2^61
+ * bytes or more aborts, since its bit length would not fit 64 bits. */
+typedef struct CuSha256 {
+    unsigned long state[8];
+    CuU64 len; /* bytes hashed so far */
+    unsigned char block[64];
+    size_t used; /* bytes waiting in block */
+    int done;
+} CuSha256;
+
+/** regions: borrows */
+void cu_sha256_init(CuSha256 *h);
+/** regions: borrows */
+void cu_sha256_update(CuSha256 *h, CuStr data);
+/** regions: borrows */
+void cu_sha256_final(CuSha256 *h, unsigned char digest[32]);
+/* init, one update and final. */
+/** regions: borrows */
+void cu_sha256(CuStr data, unsigned char digest[32]);
+
 /* ---- Growable array ---------------------------------------------------- */
 
 /* Elements of one type, stored in an arena. Use the CU_VEC_* macros: each

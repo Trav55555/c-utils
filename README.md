@@ -100,6 +100,7 @@ return values, scope rules, and pointer validity. These are the main groups:
 | Build text without format strings | `CuBuilder`, `cu_sb_*` |
 | Hold and check 64-bit unsigned values in C89 | `CuU64`, `cu_u64_add`, `cu_u64_sub`, `cu_u64_cmp` |
 | Read and write binary integers | Unsigned 8-, 16-, 32- and 64-bit readers and builder appends; explicit byte order |
+| Hash content for addressing (not for secrets) | `CuSha256`, `cu_sha256` |
 | Grow an array or view its elements | `CuVec`, `CuSlice` |
 | Map strings to values | `CuMap`; copied keys, stable entries, insertion-order iteration, no removal |
 | Remove objects without following stale handles | `CuPool`; one value type, generational handles |
