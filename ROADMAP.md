@@ -30,7 +30,7 @@ A generic work queue, worker pool or atomics API waits for a caller that needs m
 
 The only code allowed to touch the OS. Everything above it stays portable C89.
 
-- Files. Whole-file and stream reads, chunked input (`CuInput`), and listing one directory (`CuDir`) are implemented. cgrep recurses on `CuDir` and owns its ignore rules. Output helpers, lexical path operations and portable metadata remain candidates, not completed modules.
+- Files. Whole-file and stream reads, chunked input (`CuInput`), and listing one directory (`CuDir`) are implemented. cgrep recurses on `CuDir` and owns its ignore rules. Durable output is implemented for the git server's write-ahead log and blob store: `CuAppend` (unbuffered appends, fsync, truncate, an advisory lock, sticky errors so a failed fsync is never retried into false success), plus rename, remove, make directory and directory sync. wasm32-wasi has no locks or directory sync and reports ENOSYS for them. Buffered output for stdout (the `CuOutput` experiment below), lexical path operations and portable metadata remain candidates.
 - Threads. Start/join, mutex and broadcast conditions are implemented on POSIX. WASI and Cerberus use the `ENOSYS` backend. Join workers and destroy synchronization objects before releasing their arena-owned records. Arenas and containers do not become thread-safe by using them. Shared cancellation state in cgrep stays under its mutex. No atomics or generic queue are implemented; `volatile` is not synchronization. See the [thread design](docs/THREADS.md) and `dependable-c-agent-toolchain/docs/CONCURRENCY.md`.
 - Time, environment, process exit codes. Effects are visible to Ward's `authority` check.
 

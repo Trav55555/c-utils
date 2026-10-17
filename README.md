@@ -107,6 +107,7 @@ return values, scope rules, and pointer validity. These are the main groups:
 | Link nodes of several kinds, including cycles | `CuPlex`; kind-checked generational links |
 | Read files or streams | `cu_file_read`, `cu_stream_read`, chunked `CuInput` |
 | List one directory's entries | `CuDir` |
+| Write files durably: append, sync, truncate, lock; rename, remove, make and sync directories | `CuAppend`, `cu_path_rename`, `cu_dir_sync` |
 | Start and join threads, synchronize | `CuThread`, `CuMutex`, `CuCond` |
 
 ### Push values, then check the vector

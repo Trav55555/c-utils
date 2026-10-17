@@ -846,6 +846,78 @@ void cu_dir_close(CuDir *d);
 /** regions: borrows */
 int cu_dir_errno(const CuDir *d);
 
+/* ---- File output ------------------------------------------------------
+ *
+ * Durable writes, for logs and content-addressed stores. A CuAppend owns
+ * one open file and writes straight to it, unbuffered, always at its end:
+ * cu_append_write writes every byte or fails. cu_append_sync makes what was
+ * written durable (fsync, or F_FULLFSYNC where the system has it); a
+ * file's name is durable only once its directory has been synced too
+ * (cu_dir_sync).
+ *
+ * Errors are sticky, except a failed lock: after one, every call but close
+ * fails again with the saved errno. That matters most for sync, because
+ * after a failed fsync the system may have dropped the unwritten data, and
+ * a retry could falsely succeed. Where the platform has no POSIX files
+ * (Cerberus), opening fails with ENOSYS. NULL arguments abort, as do calls
+ * other than close after a close. */
+#define CU_APPEND_CREATE 1    /* create the file if it is missing */
+#define CU_APPEND_EXCLUSIVE 2 /* with CREATE: fail with EEXIST if present */
+#define CU_APPEND_TRUNCATE 4  /* empty the file on open */
+
+typedef struct CuAppend {
+    int fd;    /* the descriptor, or -1 */
+    int state; /* 1 open, 0 closed, -1 failed */
+    int error; /* saved errno */
+} CuAppend;
+
+/* Returns 1, or 0 with the errno saved (the CuAppend is then failed, and
+ * closing it is still required). New files get mode 0666 less the umask. */
+/** regions: borrows */
+CU_MUST_USE int cu_append_open(CuAppend *f, const char *path, int flags);
+/** regions: borrows */
+CU_MUST_USE int cu_append_write(CuAppend *f, CuStr bytes);
+/** regions: borrows */
+CU_MUST_USE int cu_append_sync(CuAppend *f);
+/* Shortens (or extends with zero bytes) the file to len bytes; writes still
+ * go to its new end. Fails with EFBIG if the system's file offsets cannot
+ * hold len. */
+/** regions: borrows */
+CU_MUST_USE int cu_append_truncate(CuAppend *f, size_t len);
+/* Takes an exclusive advisory lock without waiting (flock), held until
+ * close. It fails (EWOULDBLOCK) while any other open of the same file
+ * holds one, in this process or another, and with ENOSYS where the
+ * platform has no locks (wasm32-wasi). A failed lock sets errno but leaves
+ * f usable and its saved error unchanged. Where flock is emulated with
+ * POSIX record locks (some network file systems), opens within one
+ * process do not exclude each other. */
+/** regions: borrows */
+CU_MUST_USE int cu_append_lock(CuAppend *f);
+/* Closes the file. Idempotent: repeats return the same result. 0 for any
+ * earlier error or a close error, keeping the first saved errno. */
+/** regions: borrows */
+CU_MUST_USE int cu_append_close(CuAppend *f);
+/** regions: borrows */
+int cu_append_errno(const CuAppend *f);
+
+/* Path operations. Each returns 1, or 0 with errno set (ENOSYS where the
+ * platform has no POSIX files). NULL arguments abort. */
+
+/* Renames from to to, atomically replacing any file at to. */
+/** regions: borrows */
+CU_MUST_USE int cu_path_rename(const char *from, const char *to);
+/* Removes a file (not a directory). */
+/** regions: borrows */
+CU_MUST_USE int cu_path_remove(const char *path);
+/* Creates a directory with mode 0777 less the umask; EEXIST if anything is
+ * at path. */
+/** regions: borrows */
+CU_MUST_USE int cu_dir_make(const char *path);
+/* Makes the creations, renames and removals of names in the directory at
+ * path durable. ENOSYS on wasm32-wasi, which cannot sync a directory. */
+/** regions: borrows */
+CU_MUST_USE int cu_dir_sync(const char *path);
+
 /* ---- Threads -----------------------------------------------------------
  *
  * Start and join, a mutex and a condition variable, as opaque objects
