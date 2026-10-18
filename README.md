@@ -82,9 +82,9 @@ checker. Use the same compiler flags for the library and your application.
 
 For optimized builds, use `-O2` and, where supported, `-flto` to allow
 inlining across translation units. There is no unity-build file.
-If your build force-includes system headers, define `_POSIX_C_SOURCE=200809L`
-and `_DEFAULT_SOURCE` on the compiler command line so the directory and
-thread modules see their required platform declarations.
+If your build force-includes system headers, define `_POSIX_C_SOURCE=200809L`,
+`_DEFAULT_SOURCE`, and `_GNU_SOURCE` on the compiler command line. These expose
+the required platform declarations, including atomic Linux descriptor creation.
 
 ## API guide
 
@@ -109,7 +109,12 @@ return values, scope rules, and pointer validity. These are the main groups:
 | List one directory's entries | `CuDir` |
 | Write files durably: append, sync, truncate, lock; rename, remove, make and sync directories | `CuAppend`, `cu_path_rename`, `cu_dir_sync` |
 | Start and join threads, synchronize | `CuThread`, `CuMutex`, `CuCond` |
+| Run bounded task batches with cooperative cancellation and one deadline | `CuTaskSpec`, `cu_tasks_run`; [ownership and example](docs/TASKS.md) |
 | Listen, accept, connect, read and write TCP with time limits; watch many sockets | `CuSocket`, `CuPoller` |
+| Borrow memory or a socket under one read budget | `CuReader`, `cu_socket_read_for` |
+| Read bounded HTTP request heads and exact-length bodies | `CuHttpRequest`; [supported profile and complete example](docs/HTTP.md) |
+| Parse strict JSON into a tree, look up keys, read integers; write JSON with escaping | `cu_json_parse`, `cu_json_find`, `CuJsonOut` |
+| Encode and decode canonical base64 | `cu_sb_base64`, `cu_base64_decode` |
 
 ### Push values, then check the vector
 

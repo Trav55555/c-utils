@@ -729,6 +729,139 @@ CU_MUST_USE CuLink cu_plex_add_(CuPlex *px, unsigned kind, const void *v, size_t
 /** regions: returns view(*px) */
 void *cu_plex_get_(const CuPlex *px, unsigned kind, CuLink link, size_t node_size);
 
+/* ---- JSON -------------------------------------------------------------
+ *
+ * RFC 8259, strictly. cu_json_parse reads one value into a tree in an
+ * arena, or fails with the offset and reason. It accepts exactly the JSON
+ * grammar: no comments, trailing commas, leading zeros, NaN or bytes after
+ * the value. Strings must be valid UTF-8 (no overlong forms, surrogates or
+ * raw control characters), \u escapes must pair their surrogates, and an
+ * object's keys must differ. Nesting is limited to CU_JSON_MAX_DEPTH
+ * arrays and objects.
+ *
+ * Memory: each value takes a CuJson, each object member a CuStr and a
+ * size_t more, and each string and number its decoded bytes, all sized
+ * exactly. The shortest value is one byte and a comma, so on a 64-bit
+ * machine the tree can take up to about 32 times the input (single digits
+ * in arrays, with alignment); typical API bodies take a few times. Untrusted input needs a
+ * cap on its size and cu_arena_set_limit on a, which fails the parse with
+ * "out of memory" cleanly. Time is linear in the input times its nesting
+ * depth, which CU_JSON_MAX_DEPTH bounds.
+ *
+ * Numbers keep their text, since JSON does not say how wide they are;
+ * cu_json_to_u64 and cu_json_to_long read the integers that fit. Object
+ * lookup is a binary search over the keys' byte order.
+ *
+ * CuJsonOut writes JSON into its own builder. Strings are escaped as JSON
+ * requires; one that is not valid UTF-8, a number whose text is not a
+ * JSON number, or a key repeated in one object marks the writer failed and
+ * finish reports it, so it writes only JSON that cu_json_parse accepts. It
+ * also records where each open object's keys start, in the same arena, so
+ * the builder may grow by copying rather than in place. Calls out of
+ * order (a value where a key belongs, a second top-level value, an end
+ * that does not match, nesting past CU_JSON_MAX_DEPTH, finishing early)
+ * abort. */
+#define CU_JSON_MAX_DEPTH 64
+
+typedef enum CuJsonKind {
+    CU_JSON_NULL,
+    CU_JSON_BOOL,
+    CU_JSON_NUMBER,
+    CU_JSON_STRING,
+    CU_JSON_ARRAY,
+    CU_JSON_OBJECT
+} CuJsonKind;
+
+typedef struct CuJson {
+    CuJsonKind kind;
+    int truth;            /* BOOL: 0 or 1 */
+    CuStr text;           /* STRING: the decoded bytes; NUMBER: its text */
+    struct CuJson *items; /* ARRAY: the elements; OBJECT: the values */
+    CuStr *keys;          /* OBJECT: the keys, in input order */
+    size_t *order;        /* OBJECT: indices of the keys in byte order */
+    size_t n;             /* ARRAY, OBJECT: how many */
+} CuJson;
+
+typedef struct CuJsonError {
+    size_t offset;      /* where in the input parsing stopped */
+    const char *reason; /* a static string */
+} CuJsonError;
+
+/* Parses src into *out, everything allocated in a. Returns 1, or 0 with
+ * *err set (out of memory is a reason too). */
+/** regions: writes *out alloc(a) */
+CU_MUST_USE int cu_json_parse(CuArena *a, CuStr src, CuJson *out, CuJsonError *err);
+/* The value of key in obj, or NULL if obj has no such key. obj must be an
+ * object. */
+/** regions: returns view(*obj) */
+const CuJson *cu_json_find(const CuJson *obj, CuStr key);
+/* A number with no sign, fraction or exponent that fits: stores it and
+ * returns 1, else returns 0 and leaves *out unchanged. */
+/** regions: borrows */
+CU_MUST_USE int cu_json_to_u64(const CuJson *v, CuU64 *out);
+/* The same for an integer that fits long, which may be negative. */
+/** regions: borrows */
+CU_MUST_USE int cu_json_to_long(const CuJson *v, long *out);
+
+typedef struct CuJsonOut {
+    CuBuilder b;
+    CuVec keys;                              /* offsets in b of open objects' keys */
+    size_t first[CU_JSON_MAX_DEPTH];         /* keys' length when that level opened */
+    size_t depth;                            /* containers open */
+    unsigned char object[CU_JSON_MAX_DEPTH]; /* 1: that level is an object */
+    unsigned char items[CU_JSON_MAX_DEPTH];  /* 1: that level has an item */
+    int want_value;                          /* a key was written */
+    int done;                                /* the top-level value is complete */
+    int failed;
+} CuJsonOut;
+
+/** regions: binds o to a */
+void cu_json_out_init(CuJsonOut *o, CuArena *a);
+/** regions: allocates in o */
+void cu_json_begin_object(CuJsonOut *o);
+/** regions: allocates in o */
+void cu_json_end_object(CuJsonOut *o);
+/** regions: allocates in o */
+void cu_json_begin_array(CuJsonOut *o);
+/** regions: allocates in o */
+void cu_json_end_array(CuJsonOut *o);
+/** regions: allocates in o */
+void cu_json_key(CuJsonOut *o, CuStr key);
+/** regions: allocates in o */
+void cu_json_string(CuJsonOut *o, CuStr s);
+/** regions: allocates in o */
+void cu_json_u64(CuJsonOut *o, CuU64 v);
+/** regions: allocates in o */
+void cu_json_long(CuJsonOut *o, long v);
+/* text must be a JSON number, as from a parsed CU_JSON_NUMBER; a NULL
+ * text.ptr with a nonzero text.len aborts. */
+/** regions: allocates in o */
+void cu_json_number(CuJsonOut *o, CuStr text);
+/** regions: allocates in o */
+void cu_json_bool(CuJsonOut *o, int v);
+/** regions: allocates in o */
+void cu_json_null(CuJsonOut *o);
+/* Stores the JSON in *out and returns 1; or stores the empty string and
+ * returns 0 if the writer failed or ran out of memory. Every container
+ * must be closed. The view lasts as cu_sb_finish's does. */
+/** regions: writes *out view(*o) */
+CU_MUST_USE int cu_json_out_finish(CuJsonOut *o, CuStr *out);
+
+/* ---- Base64 -----------------------------------------------------------
+ *
+ * The standard alphabet (RFC 4648 section 4) with padding. Decoding is
+ * strict, so each byte string has one accepted text: the length is a
+ * multiple of 4, '=' appears only as the final one or two characters, the
+ * bits padding leaves over are zero, and nothing else (no whitespace, no
+ * URL-safe letters) is accepted. */
+
+/** regions: allocates in b */
+void cu_sb_base64(CuBuilder *b, CuStr bytes);
+/* Decodes text into *out, allocated in a. Returns 1, or 0 with *out empty
+ * if text is not canonical base64 or a runs out of memory. */
+/** regions: writes *out alloc(a) */
+CU_MUST_USE int cu_base64_decode(CuArena *a, CuStr text, CuStr *out);
+
 /* ---- Files: the platform module's first part ---------------------------
  *
  * Whole-file reads into an arena. The bytes are anything (NULs included)

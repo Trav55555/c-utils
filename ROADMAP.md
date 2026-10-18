@@ -24,7 +24,7 @@ Next, in order:
 2. **Assess path and metadata helpers.** Use cgrep's existing path classification and walking code to identify a small shared contract. Keep traversal and ignore policy in the consumer.
 3. **Resolve the `CuOutput` experiment.** Borrowed-FILE and callback-sink prototypes preserved the observed cgrep output and failure cases. The FILE-only interface is smaller. Two 21-round timing runs, including a lower-load repeat, did not resolve the 5% performance gate. Use a longer, controlled comparison before production adoption. Stdio already buffers; another persistent buffer needs evidence. No output API has shipped.
 
-A generic work queue, worker pool or atomics API waits for a caller that needs more than the existing thread APIs.
+`cu_tasks_run` adds synchronous bounded job batches, cooperative cancellation and one shared deadline on top of the thread APIs. It joins all started workers before return, including partial-start failures. Control records remain arena-owned; user outputs may be partial on failure. The finite TCP service probe exercises these batches with request framing. This is not a persistent executor, external cancellation interface or complete structured-concurrency runtime. A generic queue, persistent worker pool and atomics API remain separate work.
 
 ## 2. Platform module
 
@@ -48,7 +48,9 @@ Benchmark against `rg` on a fixed corpus. The target is within 2x before optimis
 
 Server in C, browser logic in C compiled to wasm, HTML over the wire in the style of htmx and Datastar.
 
-- **HTTP/1.1 server** on the platform module: request parser fuzzed and CBMC-proved on small inputs, arena per request (freeing a request is one `cu_arena_release`).
+- **JSON and base64** (done): a strict RFC 8259 parser into an arena tree (valid UTF-8, paired surrogates, no repeated keys, depth limit, numbers kept as text with integer readers), a writer that escapes by default, and canonical base64. Tested against the JSONTestSuite corpus and fuzzed for parse-write-parse fixed points.
+- **HTTP request-body foundation:** `CuReader` borrows memory or a socket with one monotonic read budget; `CuHttpRequest` bounds heads/field counts/body lengths and stops at the exact body boundary. The [initial framing profile](docs/HTTP.md) rejects transfer codings, duplicate lengths, upgrades and Expect handling. It is not a complete HTTP/1.1 implementation. The coordinated current-tree deep check passed; head fuzzing and a bounded body-consumption proof cover distinct claims.
+- **HTTP/1.1 server** on the platform module follows that foundation: complete framing support, response generation, protocol-error handling, routing, and an arena per request. Head-parser fuzzing and bounded proofs must remain explicit about what they cover.
 - **Routes as data.** A route table (C89 struct arrays) declares method, path, parameters and their types, response shape and docs text. The same table drives dispatch, parameter parsing/validation, and **generated OpenAPI JSON plus a docs page**, the way FastAPI does from type hints. One source, so the docs cannot drift.
 - **HTML builder** on `CuBuilder` with escaping by default: text is escaped unless explicitly marked raw, removing XSS as a bug class.
 - **Server-driven UI:** responses are HTML fragments; Server-Sent Events push fragment and signal updates (Datastar-style). A small client runtime handles swapping.
