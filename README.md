@@ -109,6 +109,7 @@ return values, scope rules, and pointer validity. These are the main groups:
 | List one directory's entries | `CuDir` |
 | Write files durably: append, sync, truncate, lock; rename, remove, make and sync directories | `CuAppend`, `cu_path_rename`, `cu_dir_sync` |
 | Start and join threads, synchronize | `CuThread`, `CuMutex`, `CuCond` |
+| Listen, accept, connect, read and write TCP with time limits; watch many sockets | `CuSocket`, `CuPoller` |
 
 ### Push values, then check the vector
 

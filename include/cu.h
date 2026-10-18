@@ -975,4 +975,110 @@ void cu_cond_destroy(CuCond *c);
  * concurrently on separate arenas. */
 void cu_thread_fail_at(size_t n);
 
+/* ---- Sockets -----------------------------------------------------------
+ *
+ * TCP over IPv4 and IPv6. A CuSocket owns one descriptor. Reads and writes
+ * block, up to the socket's time limit (none by default). cu_socket_write
+ * writes every byte or fails; writing to a closed peer fails with EPIPE or
+ * ECONNRESET and never raises SIGPIPE. Accept never blocks.
+ *
+ * Errors are sticky, as with CuAppend, except on a listening socket: a
+ * failed accept sets errno and leaves the listener usable, since most
+ * accept failures (no connection waiting, a peer that gave up, running out
+ * of descriptors) pass. A time limit running out fails with ETIMEDOUT.
+ * Host names resolve with getaddrinfo; one that does not resolve fails with
+ * EADDRNOTAVAIL. Where the platform has no sockets (wasm32-wasi,
+ * Cerberus), opening fails with ENOSYS. NULL arguments abort, as do calls
+ * other than close after a close, reading or writing a listener, accepting
+ * on a connection, and closing a socket a poller watches. */
+typedef struct CuSocket {
+    int fd;     /* the descriptor, or -1 */
+    int state;  /* 1 open, 0 closed, -1 failed, -2 closed after failure */
+    int error;  /* saved errno */
+    int listen; /* 1 for a listening socket */
+    int watched; /* 1 while a poller watches it */
+} CuSocket;
+
+/* Listens on host (a name, or an address such as "127.0.0.1" or "::1")
+ * and port; port 0 picks a free one (see cu_socket_port). Returns 1, or 0
+ * with the errno saved (close s even then). */
+/** regions: borrows */
+CU_MUST_USE int cu_socket_listen(CuSocket *s, const char *host, unsigned port, int backlog);
+/* Accepts one waiting connection into out, a blocking socket. Returns 0
+ * with errno set when the accept fails, EAGAIN (or EWOULDBLOCK) when no
+ * connection is waiting; listener stays usable and out is not opened, so
+ * do not close it. (Listen and connect are the other way round: close
+ * their socket even after they fail.) */
+/** regions: borrows */
+CU_MUST_USE int cu_socket_accept(CuSocket *listener, CuSocket *out);
+/* Connects to host and port, trying each address host resolves to. It
+ * waits as long as the system does: the time limit can only be set once
+ * connected. */
+/** regions: borrows */
+CU_MUST_USE int cu_socket_connect(CuSocket *s, const char *host, unsigned port);
+/* The local port s is bound to, or 0 on failure. */
+/** regions: borrows */
+unsigned cu_socket_port(const CuSocket *s);
+/* Every later read and write fails with ETIMEDOUT if it waits longer than
+ * ms milliseconds for the peer; 0 waits forever. Accept does not wait. */
+/** regions: borrows */
+CU_MUST_USE int cu_socket_set_timeout(CuSocket *s, unsigned long ms);
+/* Reads at most cap bytes (cap >= 1) into buf, waiting for at least one.
+ * Returns 1 with *got set; *got is 0 only once the peer has closed its
+ * side. */
+/** regions: borrows */
+CU_MUST_USE int cu_socket_read(CuSocket *s, char *buf, size_t cap, size_t *got);
+/** regions: borrows */
+CU_MUST_USE int cu_socket_write(CuSocket *s, CuStr bytes);
+/* Closes s. Idempotent, as cu_append_close. */
+/** regions: borrows */
+CU_MUST_USE int cu_socket_close(CuSocket *s);
+/** regions: borrows */
+int cu_socket_errno(const CuSocket *s);
+
+/* ---- Poller ------------------------------------------------------------
+ *
+ * Watches many sockets from one thread and says which became readable,
+ * the way a server parks idle connections. The mechanism is private (POSIX
+ * poll() today), so epoll or kqueue can replace it without changing
+ * callers.
+ *
+ * A watch is one-shot: once wait reports a socket, the poller forgets it,
+ * so another thread can use it safely; add it again to watch it again. A
+ * watch can also carry an idle limit, after which wait reports it as
+ * expired and forgets it. Any thread may call add and wake; one thread at
+ * a time calls wait. The poller is pushed into the caller's arena: destroy
+ * it before releasing the arena. A watched socket must stay open until wait
+ * reports it, and must not be added again until then: both abort. Failures
+ * to create report ENOSYS where there are no sockets or threads, else the
+ * system's errno. */
+typedef struct CuPoller CuPoller;
+
+typedef struct CuReady {
+    void *tag;   /* what add was given */
+    int expired; /* 1: the idle limit ran out; 0: readable */
+} CuReady;
+
+/* Creates a poller that can watch up to capacity sockets at once. */
+/** regions: writes *p alloc(a) */
+CU_MUST_USE int cu_poller_init(CuPoller **p, CuArena *a, size_t capacity);
+/* Watches s until it is readable, then reports tag. idle_ms 0 means no
+ * idle limit. Fails with ENOSPC when capacity sockets are watched, and with
+ * s's saved error if s has failed. s must stay where it is until
+ * reported. No
+ * regions contract: the poller keeps tag, as cu_thread_start keeps its
+ * context. */
+CU_MUST_USE int cu_poller_add(CuPoller *p, CuSocket *s, void *tag, unsigned long idle_ms);
+/* Waits up to max_ms (0: forever) for readable or expired watches, or a
+ * wake, and stores at most cap of them in out. Returns 1 with *n set (it
+ * may be 0), or 0 with errno set. No regions contract: the tags it hands
+ * back are the ones add was given. */
+CU_MUST_USE int cu_poller_wait(CuPoller *p, unsigned long max_ms, CuReady *out, size_t cap, size_t *n);
+/* Makes a wait in progress, or the next one, return. */
+/** regions: borrows */
+void cu_poller_wake(CuPoller *p);
+/* Forgets every watch; the sockets stay open and can be closed. */
+/** regions: borrows */
+void cu_poller_destroy(CuPoller *p);
+
 #endif
