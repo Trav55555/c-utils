@@ -107,12 +107,16 @@ return values, scope rules, and pointer validity. These are the main groups:
 | Link nodes of several kinds, including cycles | `CuPlex`; kind-checked generational links |
 | Read files or streams | `cu_file_read`, `cu_stream_read`, chunked `CuInput` |
 | List one directory's entries | `CuDir` |
+| Inspect a path or an already-open file, with explicit symlink policy | `CuFileInfo`, `cu_path_info`, `cu_fd_info`; [semantics and example](docs/METADATA.md) |
 | Write files durably: append, sync, truncate, lock; rename, remove, make and sync directories | `CuAppend`, `cu_path_rename`, `cu_dir_sync` |
 | Start and join threads, synchronize | `CuThread`, `CuMutex`, `CuCond` |
 | Run bounded task batches with cooperative cancellation and one deadline | `CuTaskSpec`, `cu_tasks_run`; [ownership and example](docs/TASKS.md) |
-| Listen, accept, connect, read and write TCP with time limits; watch many sockets | `CuSocket`, `CuPoller` |
+| Start an executable with optional per-child stdio redirection, poll/wait and request termination | `CuProcess`, `CuProcessStdio`, `cu_process_start_redirected`; [ownership and example](docs/PROCESSES.md) |
+| Feed finite child input while draining bounded stdout/stderr, with one budget | `CuProcessIO`, `CuProcessCapture`; [Linux backend and ownership](docs/PROCESS_IO.md) |
+| Listen, accept, read/write TCP, connect numeric IPs with a deadline; watch sockets | `CuSocket`, `CuPoller`, `cu_socket_connect_ip_for`; [DNS and ownership limits](docs/CONNECT.md) |
 | Borrow memory or a socket under one read budget | `CuReader`, `cu_socket_read_for` |
 | Read bounded HTTP request heads and exact-length bodies | `CuHttpRequest`; [supported profile and complete example](docs/HTTP.md) |
+| Build bounded HTTP/1.1 response heads without allocation or I/O | `cu_http_response_head`; [framing and caller obligations](docs/HTTP_RESPONSES.md) |
 | Parse strict JSON into a tree, look up keys, read integers; write JSON with escaping | `cu_json_parse`, `cu_json_find`, `CuJsonOut` |
 | Encode and decode canonical base64 | `cu_sb_base64`, `cu_base64_decode` |
 
@@ -224,8 +228,8 @@ operation contracts are documented in [cu.h](include/cu.h).
 ## Tests and platforms
 
 The core targets C89, not a C++ compatibility guarantee. Directory listing
-uses POSIX APIs; threads use pthreads. There is no Windows directory or
-thread backend. WASI and Cerberus have no thread backend, and Cerberus has
+uses POSIX APIs; threads use pthreads and subprocesses use POSIX spawn/wait.
+There is no Windows directory, thread or subprocess backend. WASI and Cerberus have no thread backend, and Cerberus has
 no directory backend. Unsupported initialization returns failure with
 `ENOSYS` where available; errno can be zero on other platforms.
 See [thread design and restrictions](docs/THREADS.md).
@@ -242,6 +246,36 @@ On older glibc, pass the pthread flag through `CFLAGS`:
 make test CC=gcc CFLAGS='-g -pthread'
 ```
 
+### Command-runner consumer
+
+On Linux, build the bounded subprocess CLI with the same C89 compiler flags:
+
+```sh
+make curun
+build/curun --timeout-ms 1000 --report -- /usr/bin/git status --short
+make test-curun
+```
+
+It captures stdout/stderr within separate byte limits, gives child stdin EOF,
+and explicitly reaps its direct child. See [curun](examples/curun/README.md) for
+exit codes, cleanup limits and cancellation latency. This consumer adds no
+public library API.
+
+### Local health/status consumer
+
+```sh
+make cuhealth
+build/cuhealth --port 0 --requests 8 --timeout-ms 1000
+make test-cuhealth
+```
+
+The foreground service prints its loopback address. GET/HEAD `/health` and
+`/status` exercise request framing, response heads, a poller, and a predefined
+background SHA256 self-check. It is finite, has no remote-command route, and is
+not an authenticated or public server. See [cuhealth](examples/cuhealth/README.md).
+
+### Maintainer checks
+
 The optional maintainer checks use a separate, private `dcheck` toolchain.
 These checks require toolchain access
 and the external tools configured for each check; they are not available
@@ -255,8 +289,19 @@ make deep DCHECK=/path/to/dcheck
 
 `check` runs the configured subset and lint checks, compiler matrix,
 analyzers, sanitizers, optimized build, WASI checks, and coverage gate.
-`deep` adds Cerberus, Valgrind, fuzzing, and CBMC proofs. These are test
-configurations, not a promise that every platform or input has been proved.
+`deep` adds Cerberus, Valgrind, fuzzing, and CBMC proofs. It also requires
+Python 3, Linux cgroup v2, and a working user systemd manager. The maintained
+runner limits the whole checker process tree to 1,800 seconds and 3 GiB,
+with swap disabled. It kills detached descendants too, fails if a successful
+checker leaves processes running, and has no unbounded fallback. Caller-owned
+inheritable descriptors, including CI's serialization lock, reach the checker;
+CLOEXEC descriptors still close. Private CI
+keeps its existing 2,400-second limit through `DEEP_SECONDS=2400`. Cleanup can
+take additional time after the execution deadline. This is resource control
+for trusted checks, not a sandbox for hostile code.
+
+These are test configurations, not a promise that every platform or input has
+been proved.
 The string proofs cover inputs up to four bytes; the size-add proof covers
 all inputs. Size multiplication is fuzzed against compiler overflow checks,
 not proved for all 64-bit inputs.

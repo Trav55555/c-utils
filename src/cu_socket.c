@@ -1,5 +1,8 @@
-/* getaddrinfo, AI_NUMERICSERV and clock_gettime need POSIX 2008; as in
- * cu_append.c, dcheck.conf supplies _DEFAULT_SOURCE for dcheck's builds. */
+/* POSIX networking and clocks, plus atomic Linux descriptor creation.
+ * dcheck.conf supplies feature defines before dcheck's forced header. */
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
 #ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
 #endif
@@ -55,6 +58,7 @@ static void begin(CuSocket *s, const char *host, int listening)
     s->error = 0;
     s->listen = listening;
     s->watched = 0;
+    s->timeout_ms = 0;
 }
 
 int cu_socket_errno(const CuSocket *s)
@@ -91,10 +95,19 @@ int cu_socket_connect(CuSocket *s, const char *host, unsigned port)
     return no_sockets(s);
 }
 
+int cu_socket_connect_ip_for(CuSocket *s, const char *ip, unsigned port,
+                              unsigned long timeout_ms)
+{
+    begin(s, ip, 0);
+    (void)port;
+    (void)timeout_ms;
+    return no_sockets(s);
+}
+
 /* Every socket here failed to open, so usable() always refuses it. */
 int cu_socket_accept(CuSocket *listener, CuSocket *out)
 {
-    if (out == NULL)
+    if (out == NULL || out == listener)
         abort();
     return usable(listener);
 }
@@ -119,6 +132,13 @@ int cu_socket_read(CuSocket *s, char *buf, size_t cap, size_t *got)
     return usable(s);
 }
 
+int cu_socket_read_for(CuSocket *s, char *buf, size_t cap, size_t *got,
+                       unsigned long timeout_ms)
+{
+    (void)timeout_ms;
+    return cu_socket_read(s, buf, cap, got);
+}
+
 int cu_socket_write(CuSocket *s, CuStr bytes)
 {
     (void)bytes;
@@ -131,6 +151,8 @@ int cu_socket_close(CuSocket *s)
         abort();
     if (s->state != 0)
         s->state = s->state < 0 ? -2 : 0;
+    if (s->state < 0)
+        errno = s->error;
     return s->state == 0;
 }
 
@@ -211,6 +233,11 @@ static int configure(int fd)
     one = 1;
     if (setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one) != 0)
         return 0;
+#elif !defined(MSG_NOSIGNAL)
+    /* Do not expose a socket whose write could terminate the process. */
+    (void)fd;
+    errno = ENOSYS;
+    return 0;
 #endif
     return fcntl(fd, F_SETFD, FD_CLOEXEC) == 0;
 }
@@ -277,7 +304,11 @@ static int first_address(struct addrinfo *res, int listening, int backlog)
 
     errno = EADDRNOTAVAIL;
     for (ai = res; ai != NULL; ai = ai->ai_next) {
+#ifdef __linux__
+        fd = socket(ai->ai_family, ai->ai_socktype | SOCK_CLOEXEC, ai->ai_protocol);
+#else
         fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+#endif
         if (fd < 0)
             continue;
         one = 1;
@@ -328,15 +359,19 @@ int cu_socket_accept(CuSocket *listener, CuSocket *out)
 {
     int fd;
 
-    if (out == NULL)
+    if (out == NULL || out == listener)
         abort();
     if (!usable(listener))
         return 0;
     if (!listener->listen)
         abort();
-    do
+    do {
+#ifdef __linux__
+        fd = accept4(listener->fd, NULL, NULL, SOCK_CLOEXEC);
+#else
         fd = accept(listener->fd, NULL, NULL);
-    while (fd < 0 && errno == EINTR);
+#endif
+    } while (fd < 0 && errno == EINTR);
     if (fd < 0)
         return 0;
     /* BSD and macOS hand on the listener's O_NONBLOCK; reads and writes
@@ -350,6 +385,7 @@ int cu_socket_accept(CuSocket *listener, CuSocket *out)
     out->error = 0;
     out->listen = 0;
     out->watched = 0;
+    out->timeout_ms = 0;
     return 1;
 }
 
@@ -374,15 +410,9 @@ unsigned cu_socket_port(const CuSocket *s)
 
 int cu_socket_set_timeout(CuSocket *s, unsigned long ms)
 {
-    struct timeval tv;
-
     if (!usable(s))
         return 0;
-    tv.tv_sec = (time_t)(ms / 1000);
-    tv.tv_usec = (long)(ms % 1000) * 1000;
-    if (setsockopt(s->fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv) != 0 ||
-        setsockopt(s->fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv) != 0)
-        return fail(s);
+    s->timeout_ms = ms;
     return 1;
 }
 
@@ -394,9 +424,235 @@ static int fail_io(CuSocket *s)
     return fail(s);
 }
 
-int cu_socket_read(CuSocket *s, char *buf, size_t cap, size_t *got)
+/* Remaining milliseconds, rounded up. Never add a duration to time_t. */
+static unsigned long remaining_ms(struct timespec start, struct timespec t, unsigned long ms)
+{
+    unsigned long sec;
+    unsigned long used;
+    unsigned long left;
+    long ns;
+
+    sec = (unsigned long)t.tv_sec - (unsigned long)start.tv_sec;
+    ns = t.tv_nsec - start.tv_nsec;
+    if (ns < 0) {
+        sec--;
+        ns += 1000000000L;
+    }
+    if (sec > ms / 1000)
+        return 0;
+    left = ms - sec * 1000;
+    used = (unsigned long)(ns / 1000000L);
+    return used >= left ? 0 : left - used;
+}
+
+static int io_wait(CuSocket *s, unsigned long ms, struct timespec start, short events)
+{
+    struct timespec t;
+    unsigned long left;
+    struct pollfd fd;
+    int r;
+
+    if (!ms)
+        return 1;
+    for (;;) {
+        if (clock_gettime(CLOCK_MONOTONIC, &t) != 0)
+            return 0;
+        left = remaining_ms(start, t, ms);
+        if (left == 0)
+            break;
+        fd.fd = s->fd;
+        fd.events = events;
+        fd.revents = 0;
+        r = poll(&fd, 1, left > INT_MAX ? INT_MAX : (int)left);
+        if (r > 0)
+            return 1;
+        if (r < 0 && errno != EINTR)
+            return 0;
+    }
+    errno = ETIMEDOUT;
+    return 0;
+}
+
+static int io_start(unsigned long ms, struct timespec *t)
+{
+    t->tv_sec = 0;
+    t->tv_nsec = 0;
+    return !ms || clock_gettime(CLOCK_MONOTONIC, t) == 0;
+}
+
+/* Numeric connect shares the existing duration arithmetic, not the
+ * configured later read/write timeout. Zero still means unlimited. */
+static int connect_delay(struct timespec start, unsigned long ms, int *delay)
+{
+    struct timespec t;
+    unsigned long left;
+
+    if (ms == 0) {
+        *delay = -1;
+        return 1;
+    }
+    if (clock_gettime(CLOCK_MONOTONIC, &t) != 0)
+        return 0;
+    left = remaining_ms(start, t, ms);
+    if (left == 0) {
+        errno = ETIMEDOUT;
+        return 0;
+    }
+    *delay = left > (unsigned long)INT_MAX ? INT_MAX : (int)left;
+    return 1;
+}
+
+static int connect_ready(int socket_fd, struct timespec start, unsigned long ms)
+{
+    struct pollfd ready;
+    socklen_t length;
+    int delay;
+    int result;
+    int socket_error;
+
+    for (;;) {
+        if (!connect_delay(start, ms, &delay))
+            return 0;
+        ready.fd = socket_fd;
+        ready.events = POLLOUT;
+        ready.revents = 0;
+        result = poll(&ready, 1, delay);
+        if (result < 0) {
+            if (errno == EINTR)
+                continue;
+            return 0;
+        }
+        if (result == 0)
+            continue;
+        if ((ready.revents & POLLNVAL) != 0) {
+            errno = EBADF;
+            return 0;
+        }
+        if ((ready.revents & (POLLOUT | POLLERR | POLLHUP)) == 0)
+            continue;
+        socket_error = -1;
+        length = sizeof socket_error;
+        if (getsockopt(socket_fd, SOL_SOCKET, SO_ERROR, &socket_error, &length) != 0)
+            return 0;
+        if (length != sizeof socket_error || socket_error < 0) {
+            errno = EIO;
+            return 0;
+        }
+        if (socket_error == EINPROGRESS || socket_error == EALREADY)
+            continue;
+        if (socket_error != 0) {
+            errno = socket_error;
+            return 0;
+        }
+        if ((ready.revents & POLLOUT) != 0)
+            return 1;
+        errno = ECONNABORTED;
+        return 0;
+    }
+}
+
+static const struct sockaddr_in empty_ipv4;
+static const struct sockaddr_in6 empty_ipv6;
+
+int cu_socket_connect_ip_for(CuSocket *s, const char *ip, unsigned port,
+                              unsigned long timeout_ms)
+{
+    struct sockaddr_in ipv4;
+    struct sockaddr_in6 ipv6;
+    const struct sockaddr *endpoint;
+    struct timespec start;
+    socklen_t endpoint_length;
+    size_t text_length;
+    int family;
+    int parsed;
+    int socket_fd;
+    int result;
+    int delay;
+
+    begin(s, ip, 0);
+    if (!io_start(timeout_ms, &start))
+        return fail(s);
+    for (text_length = 0; text_length < INET6_ADDRSTRLEN; text_length++) {
+        if (ip[text_length] == '\0')
+            break;
+    }
+    if (port > 65535 || text_length == 0 || text_length == INET6_ADDRSTRLEN) {
+        errno = EINVAL;
+        return fail(s);
+    }
+    ipv4 = empty_ipv4;
+    parsed = inet_pton(AF_INET, ip, &ipv4.sin_addr);
+    if (parsed < 0)
+        return fail(s);
+    if (parsed == 1) {
+        family = AF_INET;
+        ipv4.sin_family = AF_INET;
+        ipv4.sin_port = htons((unsigned short)port);
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) || defined(__DragonFly__)
+        ipv4.sin_len = (unsigned char)sizeof ipv4;
+#endif
+        endpoint = (const struct sockaddr *)&ipv4;
+        endpoint_length = sizeof ipv4;
+    } else {
+        ipv6 = empty_ipv6;
+        parsed = inet_pton(AF_INET6, ip, &ipv6.sin6_addr);
+        if (parsed != 1) {
+            if (parsed == 0)
+                errno = EINVAL;
+            return fail(s);
+        }
+        family = AF_INET6;
+        ipv6.sin6_family = AF_INET6;
+        ipv6.sin6_port = htons((unsigned short)port);
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) || defined(__DragonFly__)
+        ipv6.sin6_len = (unsigned char)sizeof ipv6;
+#endif
+        endpoint = (const struct sockaddr *)&ipv6;
+        endpoint_length = sizeof ipv6;
+    }
+    for (;;) {
+        if (!connect_delay(start, timeout_ms, &delay))
+            return fail(s);
+#ifdef __linux__
+        socket_fd = socket(family, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
+#else
+        socket_fd = socket(family, SOCK_STREAM, 0);
+#endif
+        if (socket_fd < 0)
+            return fail(s);
+        if (!configure(socket_fd)
+#ifndef __linux__
+            || !set_nonblocking(socket_fd, 1)
+#endif
+            || !connect_delay(start, timeout_ms, &delay)) {
+            discard(socket_fd);
+            return fail(s);
+        }
+        result = connect(socket_fd, endpoint, endpoint_length);
+        if (result != 0 && errno == EINTR) {
+            /* POSIX leaves an interrupted connect's state unspecified. */
+            discard(socket_fd);
+            continue;
+        }
+        if ((result != 0 && errno != EINPROGRESS && errno != EALREADY) ||
+            (result != 0 && !connect_ready(socket_fd, start, timeout_ms)) ||
+            !connect_delay(start, timeout_ms, &delay) ||
+            !set_nonblocking(socket_fd, 0) ||
+            !connect_delay(start, timeout_ms, &delay)) {
+            discard(socket_fd);
+            return fail(s);
+        }
+        s->fd = socket_fd;
+        s->state = 1;
+        return 1;
+    }
+}
+
+int cu_socket_read_for(CuSocket *s, char *buf, size_t cap, size_t *got,
+                       unsigned long timeout_ms)
 {
     ssize_t r;
+    struct timespec start;
 
     if (buf == NULL || cap == 0 || got == NULL)
         abort();
@@ -404,13 +660,28 @@ int cu_socket_read(CuSocket *s, char *buf, size_t cap, size_t *got)
         return 0;
     if (s->listen)
         abort();
-    do
-        r = recv(s->fd, buf, cap < MAX_CHUNK ? cap : MAX_CHUNK, 0);
-    while (r < 0 && errno == EINTR);
+    if (!io_start(timeout_ms, &start))
+        return fail(s);
+    for (;;) {
+        if (!io_wait(s, timeout_ms, start, POLLIN))
+            return fail(s);
+        r = recv(s->fd, buf, cap < MAX_CHUNK ? cap : MAX_CHUNK,
+                 timeout_ms ? MSG_DONTWAIT : 0);
+        if (r >= 0 || (errno != EINTR && !(timeout_ms &&
+            (errno == EAGAIN || errno == EWOULDBLOCK))))
+            break;
+    }
     if (r < 0)
         return fail_io(s);
     *got = (size_t)r;
     return 1;
+}
+
+int cu_socket_read(CuSocket *s, char *buf, size_t cap, size_t *got)
+{
+    if (s == NULL)
+        abort();
+    return cu_socket_read_for(s, buf, cap, got, s->timeout_ms);
 }
 
 int cu_socket_write(CuSocket *s, CuStr bytes)
@@ -418,17 +689,24 @@ int cu_socket_write(CuSocket *s, CuStr bytes)
     const char *p;
     size_t left;
     ssize_t r;
+    struct timespec start;
 
     if (!usable(s))
         return 0;
     if (s->listen)
         abort();
+    if (!io_start(s->timeout_ms, &start))
+        return fail(s);
     p = bytes.ptr;
     left = bytes.len;
     while (left > 0) {
-        r = send(s->fd, p, left < MAX_CHUNK ? left : MAX_CHUNK, SEND_FLAGS);
+        if (!io_wait(s, s->timeout_ms, start, POLLOUT))
+            return fail(s);
+        r = send(s->fd, p, left < MAX_CHUNK ? left : MAX_CHUNK,
+                 SEND_FLAGS | (s->timeout_ms ? MSG_DONTWAIT : 0));
         if (r < 0) {
-            if (errno == EINTR)
+            if (errno == EINTR || (s->timeout_ms &&
+                (errno == EAGAIN || errno == EWOULDBLOCK)))
                 continue;
             return fail_io(s);
         }
@@ -450,8 +728,10 @@ int cu_socket_close(CuSocket *s)
         abort();
     if (s->state == 0)
         return 1;
-    if (s->state == -2)
+    if (s->state == -2) {
+        errno = s->error;
         return 0;
+    }
     if (s->fd >= 0) {
         if (close(s->fd) != 0 && s->state > 0) {
             s->state = -1;
@@ -474,8 +754,8 @@ typedef struct Watch {
     CuSocket *socket; /* its watched flag is cleared when reported */
     int fd;
     void *tag;
-    int timed; /* 1: deadline applies */
-    struct timespec deadline;
+    unsigned long idle_ms; /* 0: no expiry */
+    struct timespec start;
 } Watch;
 
 /* Adds go to pending under the lock, because the waiting thread reads
@@ -498,31 +778,6 @@ static void now(struct timespec *t)
 {
     if (clock_gettime(CLOCK_MONOTONIC, t) != 0)
         abort();
-}
-
-static int before(struct timespec a, struct timespec b)
-{
-    return a.tv_sec < b.tv_sec || (a.tv_sec == b.tv_sec && a.tv_nsec < b.tv_nsec);
-}
-
-/* Milliseconds from t to deadline d, rounded up and clamped to
- * [0, INT_MAX], so a wait never wakes just short of a deadline. */
-static int ms_until(struct timespec t, struct timespec d)
-{
-    long sec;
-    long nsec;
-
-    if (!before(t, d))
-        return 0;
-    sec = (long)(d.tv_sec - t.tv_sec);
-    nsec = d.tv_nsec - t.tv_nsec;
-    if (nsec < 0) {
-        sec--;
-        nsec += 1000000000L;
-    }
-    if (sec >= INT_MAX / 1000 - 1)
-        return INT_MAX;
-    return (int)(sec * 1000 + (nsec + 999999L) / 1000000L);
 }
 
 static void check(const CuPoller *p)
@@ -556,7 +811,11 @@ int cu_poller_init(CuPoller **p, CuArena *a, size_t capacity)
     }
     if (!cu_mutex_init(&px->lock, a))
         return 0;
+#ifdef __linux__
+    if (pipe2(px->wake, O_CLOEXEC | O_NONBLOCK) != 0) {
+#else
     if (pipe(px->wake) != 0) {
+#endif
         cu_mutex_destroy(px->lock);
         return 0;
     }
@@ -595,16 +854,8 @@ int cu_poller_add(CuPoller *p, CuSocket *s, void *tag, unsigned long idle_ms)
     w->socket = s;
     w->fd = s->fd;
     w->tag = tag;
-    w->timed = idle_ms != 0;
-    if (w->timed) {
-        now(&w->deadline);
-        w->deadline.tv_sec += (time_t)(idle_ms / 1000);
-        w->deadline.tv_nsec += (long)(idle_ms % 1000) * 1000000L;
-        if (w->deadline.tv_nsec >= 1000000000L) {
-            w->deadline.tv_sec++;
-            w->deadline.tv_nsec -= 1000000000L;
-        }
-    }
+    w->idle_ms = idle_ms;
+    now(&w->start);
     p->count++;
     cu_mutex_unlock(p->lock);
     cu_poller_wake(p);
@@ -617,7 +868,9 @@ void cu_poller_wake(CuPoller *p)
 
     check(p);
     /* A full pipe already holds a wake, so a failed write loses nothing. */
-    r = write(p->wake[1], "w", 1);
+    do
+        r = write(p->wake[1], "w", 1);
+    while (r < 0 && errno == EINTR);
     (void)r;
 }
 
@@ -639,6 +892,7 @@ int cu_poller_wait(CuPoller *p, unsigned long max_ms, CuReady *out, size_t cap, 
     int timeout;
     int r;
     int ready;
+    unsigned long left;
 
     check(p);
     if (n == NULL || (out == NULL && cap != 0))
@@ -662,8 +916,9 @@ int cu_poller_wait(CuPoller *p, unsigned long max_ms, CuReady *out, size_t cap, 
         p->fds[i + 1].fd = p->watches[i].fd;
         p->fds[i + 1].events = POLLIN;
         p->fds[i + 1].revents = 0;
-        if (p->watches[i].timed) {
-            r = ms_until(t, p->watches[i].deadline);
+        if (p->watches[i].idle_ms != 0) {
+            left = remaining_ms(p->watches[i].start, t, p->watches[i].idle_ms);
+            r = left > INT_MAX ? INT_MAX : (int)left;
             if (timeout < 0 || r < timeout)
                 timeout = r;
         }
@@ -684,7 +939,8 @@ int cu_poller_wait(CuPoller *p, unsigned long max_ms, CuReady *out, size_t cap, 
     cu_mutex_lock(p->lock);
     for (i = 0; i < p->n; i++) {
         ready = p->fds[i + 1].revents != 0;
-        if ((ready || (p->watches[i].timed && !before(t, p->watches[i].deadline))) && got < cap) {
+        if ((ready || (p->watches[i].idle_ms != 0 &&
+            remaining_ms(p->watches[i].start, t, p->watches[i].idle_ms) == 0)) && got < cap) {
             p->watches[i].socket->watched = 0;
             out[got].tag = p->watches[i].tag;
             out[got].expired = !ready;

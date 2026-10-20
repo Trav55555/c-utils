@@ -20,5 +20,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Check CI helpers offline
-        run: python3 -I -m unittest discover -s tests -p 'test_ci.py'
+        run: |
+          python3 -I -m unittest discover -s tests -p 'test_ci.py'
+          python3 -I -m unittest discover -s tests -p 'test_verify*.py'
       - run: make test CC=${{ matrix.cc }} CFLAGS="${{ matrix.cflags }}"
+      - run: make test-curun CC=${{ matrix.cc }} CFLAGS="${{ matrix.cflags }}"
+      - run: make test-cuhealth CC=${{ matrix.cc }} CFLAGS="${{ matrix.cflags }}"

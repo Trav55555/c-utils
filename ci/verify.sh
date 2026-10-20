@@ -5,6 +5,7 @@ set -euo pipefail
 ulimit -c 0
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 python3 -I -m unittest discover -s "$root/tests" -p 'test_ci.py'
+VERIFY_REQUIRE_SCOPE=1 python3 -I -m unittest discover -s "$root/tests" -p 'test_verify*.py'
 [[ "$(uname -s)" == Linux && "$(uname -m)" == x86_64 ]] || { echo 'CI requires Linux x86_64' >&2; exit 1; }
 : "${XDG_RUNTIME_DIR:?user systemd runtime required}"
 : "${RUNNER_TEMP:?runner scratch required}"
@@ -26,9 +27,8 @@ toolchain="$work/dependable-c-agent-toolchain"
 make -C "$toolchain" regions/regions
 # Logs land in the runner's checkout, where the workflow uploads them.
 mkdir -p "$root/ci-artifacts"
-"$toolchain/bin/dcheck-tools" exec systemd-run --user --scope -q \
-    -p MemoryMax=3G -p MemorySwapMax=0 -p RuntimeMaxSec=2400 nice -n 15 \
-    make -j1 -C "$work/c-utils" deep DCHECK="$toolchain/bin/dcheck" \
+"$toolchain/bin/dcheck-tools" exec nice -n 15 \
+    make -j1 -C "$work/c-utils" deep DEEP_SECONDS=2400 DCHECK="$toolchain/bin/dcheck" \
     2>&1 | tee "$root/ci-artifacts/deep.log"
 cp -a "$work/c-utils/.dcheck/logs" "$root/ci-artifacts/logs"
 grep -Fx 'PASS regions' "$root/ci-artifacts/deep.log"

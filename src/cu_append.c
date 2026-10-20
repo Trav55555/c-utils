@@ -153,6 +153,9 @@ int cu_append_open(CuAppend *f, const char *path, int flags)
         abort();
     check_path(path);
     oflags = O_WRONLY | O_APPEND;
+#ifdef O_CLOEXEC
+    oflags |= O_CLOEXEC;
+#endif
     if (flags & CU_APPEND_CREATE)
         oflags |= O_CREAT;
     if ((flags & CU_APPEND_CREATE) && (flags & CU_APPEND_EXCLUSIVE))
@@ -163,6 +166,17 @@ int cu_append_open(CuAppend *f, const char *path, int flags)
     f->fd = open(path, oflags, 0666);
     if (f->fd < 0)
         return fail(f);
+#ifndef O_CLOEXEC
+    if (fcntl(f->fd, F_SETFD, FD_CLOEXEC) != 0) {
+        int saved;
+
+        saved = errno;
+        (void)close(f->fd);
+        f->fd = -1;
+        errno = saved;
+        return fail(f);
+    }
+#endif
     f->state = 1;
     return 1;
 }
@@ -203,11 +217,12 @@ int cu_append_sync(CuAppend *f)
         return 0;
 #ifdef F_FULLFSYNC
     /* Apple's fsync leaves data in the drive's cache. */
-    if (fcntl(f->fd, F_FULLFSYNC) == 0)
-        return 1;
-#endif
+    if (fcntl(f->fd, F_FULLFSYNC) != 0)
+        return fail(f);
+#else
     if (fsync(f->fd) != 0)
         return fail(f);
+#endif
     return 1;
 }
 
@@ -290,6 +305,7 @@ int cu_dir_sync(const char *path)
     int fd;
     int ok;
     int saved;
+    int flags;
 
     check_path(path);
 #ifdef __wasi__
@@ -297,9 +313,21 @@ int cu_dir_sync(const char *path)
     errno = ENOSYS;
     return 0;
 #else
-    fd = open(path, O_RDONLY | O_DIRECTORY);
+    flags = O_RDONLY | O_DIRECTORY;
+#ifdef O_CLOEXEC
+    flags |= O_CLOEXEC;
+#endif
+    fd = open(path, flags);
     if (fd < 0)
         return 0;
+#ifndef O_CLOEXEC
+    if (fcntl(fd, F_SETFD, FD_CLOEXEC) != 0) {
+        saved = errno;
+        (void)close(fd);
+        errno = saved;
+        return 0;
+    }
+#endif
     ok = fsync(fd) == 0;
     saved = errno;
     if (close(fd) != 0 && ok) {

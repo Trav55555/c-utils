@@ -979,12 +979,53 @@ void cu_dir_close(CuDir *d);
 /** regions: borrows */
 int cu_dir_errno(const CuDir *d);
 
+/* ---- File metadata -----------------------------------------------------
+ *
+ * Read-only observations, not access checks, locks or stable size promises.
+ * Path lookup does not pin a later open. FD lookup observes the already-open
+ * object; keep that descriptor open and protected against close/reuse.
+ * Neither operation allocates, opens/closes, reads, seeks or flushes.
+ * See docs/METADATA.md for path-resolution and native-ABI limits. */
+typedef struct CuFileInfo {
+    CuDirKind kind;
+    CuU64 size; /* logical bytes for CU_DIR_FILE; zero for other kinds */
+} CuFileInfo;
+typedef enum CuInfoResult {
+    CU_INFO_ERROR = -1,
+    CU_INFO_MISSING = 0,
+    CU_INFO_OK = 1
+} CuInfoResult;
+typedef enum CuPathFollow {
+    CU_PATH_NOFOLLOW,
+    CU_PATH_FOLLOW
+} CuPathFollow;
+
+/* stat/lstat-style lookup. NOFOLLOW concerns the final component under
+ * native path syntax, not intermediate symlinks or a symlink-free path.
+ * Only ENOENT is MISSING; ENOTDIR and other failures are ERROR. Non-OK
+ * leaves output unchanged and preserves the native errno, including zero.
+ * Negative/unrepresentable regular-file size is ERROR/EOVERFLOW, ERANGE
+ * where EOVERFLOW is unavailable. NULL pointers or unknown mode abort. */
+/** regions: borrows */
+CU_MUST_USE CuInfoResult cu_path_info(const char *path, CuPathFollow follow,
+                                     CuFileInfo *out);
+/* Borrow a native file descriptor. OK or ERROR, never MISSING; invalid
+ * descriptors report EBADF on supported backends. No position/flag changes.
+ * Unsupported backends return ERROR/ENOSYS, EINVAL where unavailable, after
+ * pointer/mode validation and regardless of descriptor validity. */
+/** regions: borrows */
+CU_MUST_USE CuInfoResult cu_fd_info(int fd, CuFileInfo *out);
+
 /* ---- File output ------------------------------------------------------
  *
  * Durable writes, for logs and content-addressed stores. A CuAppend owns
- * one open file and writes straight to it, unbuffered, always at its end:
- * cu_append_write writes every byte or fails. cu_append_sync makes what was
- * written durable (fsync, or F_FULLFSYNC where the system has it); a
+ * one open file and writes straight to it, unbuffered, always at its end.
+ * Close it before reopening and do not copy an active handle. Serialize
+ * operations on each handle. cu_append_write writes every byte or fails;
+ * failure can leave a written prefix. A multi-call write is not an atomic
+ * record against other writers. Close does not sync implicitly.
+ * cu_append_sync makes writes durable through fsync, or F_FULLFSYNC where
+ * the system has it. A
  * file's name is durable only once its directory has been synced too
  * (cu_dir_sync).
  *
@@ -1005,7 +1046,11 @@ typedef struct CuAppend {
 } CuAppend;
 
 /* Returns 1, or 0 with the errno saved (the CuAppend is then failed, and
- * closing it is still required). New files get mode 0666 less the umask. */
+ * closing it is still required). New files get mode 0666 less the umask.
+ * Paths must be trusted: open follows symlinks, TRUNCATE is destructive,
+ * and CREATE alone does not exclude an existing file. Use CREATE with
+ * EXCLUSIVE to require a new file, and private directories/umask for secrets.
+ * Descriptors are close-on-exec, atomically where O_CLOEXEC is available. */
 /** regions: borrows */
 CU_MUST_USE int cu_append_open(CuAppend *f, const char *path, int flags);
 /** regions: borrows */
@@ -1108,10 +1153,168 @@ void cu_cond_destroy(CuCond *c);
  * concurrently on separate arenas. */
 void cu_thread_fail_at(size_t n);
 
+/* ---- Synchronous bounded cooperative task batches ----------------------
+ * Runs an immutable job list with at most min(count, max_workers) native
+ * workers. Each callback returns nonzero success or zero with errno set;
+ * errno zero is still a failure. Every started worker is joined before
+ * return, including after startup failure. Success means every job ran
+ * exactly once. The first observed failure/cancel/deadline stops pending
+ * dispatch and wins the saved error; outputs may already be partial.
+ *
+ * Keep jobs/contexts alive until return. Control records consume control
+ * arena space even on failure; callbacks must not mutate that arena. Use
+ * separate arenas/data or synchronize user state. No callback survives
+ * return. There is no regions borrowing summary for run: the checker does
+ * not prove its synchronous cross-thread lifetime boundary.
+ *
+ * One positive monotonic millisecond budget spans startup and all jobs.
+ * Cancellation is cooperative: ignoring it or blocking forever can delay
+ * run forever. See docs/TASKS.md for ownership, limits and a complete example. */
+typedef struct CuTask CuTask;
+typedef struct CuTaskSpec {
+    int (*fn)(CuTask *task, void *context);
+    void *context;
+} CuTaskSpec;
+
+/* control must be initialized, max_workers/timeout_ms positive and every
+ * nonempty spec must have fn; invalid arguments abort. NULL jobs is valid
+ * only for count=0, which succeeds without allocation/OS calls. Unsupported
+ * backends report ENOSYS for nonempty batches. Returns 1, or 0 with first
+ * saved errno, including zero. Release control only after run returns. */
+CU_MUST_USE int cu_tasks_run(CuArena *control, const CuTaskSpec *jobs, size_t count,
+                             size_t max_workers, unsigned long timeout_ms);
+/* Accessors are valid only during a callback; never retain a CuTask pointer.
+ * Cancelled covers explicit cancel, any failure and deadline expiry. */
+/** regions: borrows */
+CU_MUST_USE int cu_task_cancelled(CuTask *task);
+/* Returns 1 with positive *remaining_ms rounded up, or 0 with *remaining_ms=0
+ * and the first saved errno when stopped. NULL output aborts. */
+/** regions: borrows */
+CU_MUST_USE int cu_task_remaining(CuTask *task, unsigned long *remaining_ms);
+/* Stops dispatch with ECANCELED unless already stopped or expired. */
+/** regions: borrows */
+void cu_task_cancel(CuTask *task);
+
+/* ---- Subprocesses ------------------------------------------------------
+ *
+ * An arena-owned handle owns one direct child until wait reports DONE.
+ * Wait before releasing its arena. Serialize handle operations; never reap
+ * these children elsewhere or change SIGCHLD reaping policy during start
+ * or while any handle is live. SIG_IGN/SA_NOCLDWAIT are incompatible.
+ * Not a sandbox, shell, process-tree manager or deadline-bounded spawn.
+ * See docs/PROCESSES.md for inheritance, signal and cleanup rules. */
+typedef struct CuProcess CuProcess;
+typedef enum CuProcessExitKind {
+    CU_PROCESS_EXITED,
+    CU_PROCESS_SIGNALED
+} CuProcessExitKind;
+typedef struct CuProcessExit {
+    CuProcessExitKind kind;
+    int code; /* exit status or native signal number, according to kind */
+} CuProcessExit;
+typedef enum CuProcessWait {
+    CU_PROCESS_ERROR = -1,
+    CU_PROCESS_RUNNING = 0,
+    CU_PROCESS_DONE = 1
+} CuProcessWait;
+typedef enum CuProcessSignal {
+    CU_PROCESS_TERMINATE,
+    CU_PROCESS_KILL
+} CuProcessSignal;
+
+/* No shell or PATH search. argv[0] is required; vectors/strings are valid
+ * NULL/NUL-terminated and borrowed only during start. NULL envp means empty
+ * environment. Inherit cwd, stdio and non-CLOEXEC descriptors. Child signal
+ * mask is empty and catchable dispositions default; parent state unchanged.
+ * Returns 1 with ownership or 0/errno, output unchanged. Failures may consume
+ * arena space. Initial auto-reaping policy is EINVAL; no backend is ENOSYS.
+ * Spawn success may still lead to child exit 127 on setup/exec failure. */
+/* No regions summary: posix_spawn's borrowing is not modeled. */
+CU_MUST_USE int cu_process_start(CuProcess **p, CuArena *a, const char *path,
+                                char *const argv[], char *const envp[]);
+/* Explicit child stdio sources are borrowed native descriptors. Initialize
+ * every field; INHERIT preserves the corresponding plain-start stream. */
+#define CU_PROCESS_INHERIT (-1)
+typedef struct CuProcessStdio {
+    int input;
+    int output;
+    int error;
+} CuProcessStdio;
+/* As start, but snapshot explicit sources before child-only dup2 actions.
+ * This function leaves parent descriptors, FD flags and stdio unchanged.
+ * Open-file offsets/status flags still reflect child operations. Keep sources
+ * stable during start, then
+ * close them when desired. Explicit sources work even with FD_CLOEXEC
+ * or 0/1/2 swaps. Other non-CLOEXEC descriptors still inherit, not a sandbox.
+ * Invalid descriptors are EBADF; builds without atomic CLOEXEC duplication
+ * report ENOSYS. Other native errors propagate. NULL stdio aborts. No pipe creation, draining or capture limits.
+ * No regions summary: spawn borrowing is not modeled. */
+CU_MUST_USE int cu_process_start_redirected(CuProcess **p, CuArena *a, const char *path,
+                                           char *const argv[], char *const envp[],
+                                           const CuProcessStdio *stdio);
+/* 0 ms polls; positive ms is one monotonic waiting budget, not a child
+ * lifetime limit or hard scheduling bound. EINTR does not reset it.
+ * RUNNING/ERROR leave output unchanged and child owned. DONE reaps and
+ * caches the result for repeat waits. Unexpected ECHILD aborts: ownership
+ * was violated and signaling a possibly recycled PID would be unsafe. */
+/** regions: borrows */
+CU_MUST_USE CuProcessWait cu_process_wait(CuProcess *p, unsigned long timeout_ms,
+                                        CuProcessExit *out);
+/* SIGTERM/SIGKILL to the direct child only. Returns 1 on submission or
+ * 0/errno; completion still requires wait. After DONE, 0/ESRCH, no signal.
+ * NULL required pointers or unknown signal values abort. */
+/** regions: borrows */
+CU_MUST_USE int cu_process_signal(CuProcess *p, CuProcessSignal signal);
+
+/* One-shot subprocess pipe communication. Linux atomic-CLOEXEC backend;
+ * other platforms return ENOSYS. The bundle and child are arena-owned.
+ * Close all IO ends AND wait child DONE before releasing their arena.
+ * Serialize operations; no asynchronous cancellation/longjmp through cleanup. */
+typedef struct CuProcessIO CuProcessIO;
+typedef struct CuProcessCapture {
+    char *out;
+    size_t out_cap;
+    size_t out_len;
+    char *err;
+    size_t err_cap;
+    size_t err_len;
+    size_t input_sent;
+} CuProcessCapture;
+/* Return 0/errno without child/output change, or 1 with child ownership.
+ * Success does not certify exec or IO readiness: any post-spawn cleanup
+ * failure is retained for pump/close. Existing start inheritance rules apply. */
+CU_MUST_USE int cu_process_io_start(CuProcessIO **io, CuArena *a, const char *path,
+                                   char *const argv[], char *const envp[]);
+/* Borrow the same child handle, also after IO close/failure; signal/wait
+ * remain caller policy. Getter/close require a valid successful-start bundle. */
+CuProcess *cu_process_io_child(CuProcessIO *io);
+/* Set only capture pointers/capacities; counts reset and report binary
+ * prefixes/progress on every return. Nonzero lengths require valid pointers;
+ * input/output/control storage must be disjoint. No NUL termination.
+ * One-shot: feeds finite input and drains both outputs fairly. All parent
+ * pipe ends close on success/error. No kill/reap. 1 means input accepted and
+ * both outputs EOF, not child exit. EFBIG means excess output; exact cap is
+ * accepted. Positive ms is one pump-entry budget; 0 disables that deadline.
+ * ETIMEDOUT/other failures retain first errno, even 0. Child remains owned.
+ * Writes suppress their SIGPIPE per-thread without disposition changes;
+ * old pending SIGPIPE survives. Concurrent external SIGPIPE may coalesce.
+ * Repeated pump/pump after close and NULL required pointers abort. */
+CU_MUST_USE int cu_process_io_pump(CuProcessIO *io, CuStr input,
+                                  CuProcessCapture *capture, unsigned long timeout_ms);
+/* Abandon IO only. Idempotent, replays the aggregate first IO error, even0.
+ * A valid-mask restoration failure during a guarded write aborts. */
+CU_MUST_USE int cu_process_io_close(CuProcessIO *io);
+
 /* ---- Sockets -----------------------------------------------------------
  *
- * TCP over IPv4 and IPv6. A CuSocket owns one descriptor. Reads and writes
- * block, up to the socket's time limit (none by default). cu_socket_write
+ * Plaintext TCP over IPv4 and IPv6, without peer authentication or TLS.
+ * A CuSocket owns one descriptor. Close before reopening or accepting into
+ * it; do not copy an active socket. Serialize
+ * all operations on each socket (including timeout changes and close).
+ * Hostname resolution and cu_socket_connect remain unbounded. Numeric
+ * cu_socket_connect_ip_for has its own opening budget, not a later I/O
+ * timeout. Reads and writes block up to the socket's time limit, with no
+ * limit by default. cu_socket_write
  * writes every byte or fails; writing to a closed peer fails with EPIPE or
  * ECONNRESET and never raises SIGPIPE. Accept never blocks.
  *
@@ -1130,6 +1333,7 @@ typedef struct CuSocket {
     int error;  /* saved errno */
     int listen; /* 1 for a listening socket */
     int watched; /* 1 while a poller watches it */
+    unsigned long timeout_ms; /* per-public-call I/O budget; 0: unlimited */
 } CuSocket;
 
 /* Listens on host (a name, or an address such as "127.0.0.1" or "::1")
@@ -1141,7 +1345,7 @@ CU_MUST_USE int cu_socket_listen(CuSocket *s, const char *host, unsigned port, i
  * with errno set when the accept fails, EAGAIN (or EWOULDBLOCK) when no
  * connection is waiting; listener stays usable and out is not opened, so
  * do not close it. (Listen and connect are the other way round: close
- * their socket even after they fail.) */
+ * their socket even after they fail.) out == listener aborts. */
 /** regions: borrows */
 CU_MUST_USE int cu_socket_accept(CuSocket *listener, CuSocket *out);
 /* Connects to host and port, trying each address host resolves to. It
@@ -1149,11 +1353,27 @@ CU_MUST_USE int cu_socket_accept(CuSocket *listener, CuSocket *out);
  * connected. */
 /** regions: borrows */
 CU_MUST_USE int cu_socket_connect(CuSocket *s, const char *host, unsigned port);
+/* Connect one numeric IPv4/IPv6 literal, never resolve names. Hostnames,
+ * brackets, zone IDs and invalid/overlong literals fail EINVAL. Positive ms
+ * is one opening budget through setup, connect and flag restoration; 0 is
+ * unlimited. Connect EINTR retries a fresh socket under that same budget.
+ * Returns a blocking CLOEXEC connection with read/write timeout still0,
+ * or sticky failure/errno (including0). Close new FDs once, never retry a
+ * possibly-consumed descriptor after EINTR; close the failed socket too.
+ * Linux creation is atomic CLOEXEC/nonblocking; other POSIX backends keep
+ * the existing documented fcntl inheritance window. No hard scheduling,
+ * syscall or cleanup bound; unsupported backend ENOSYS. NULL s/ip abort.
+ * ip is NUL-terminated and borrowed only during this call. */
+/* No regions summary: inet_pton's borrowing is not modeled. */
+CU_MUST_USE int cu_socket_connect_ip_for(CuSocket *s, const char *ip, unsigned port,
+                                        unsigned long timeout_ms);
 /* The local port s is bound to, or 0 on failure. */
 /** regions: borrows */
 unsigned cu_socket_port(const CuSocket *s);
-/* Every later read and write fails with ETIMEDOUT if it waits longer than
- * ms milliseconds for the peer; 0 waits forever. Accept does not wait. */
+/* Every later public read/write has one monotonic ms-millisecond budget,
+ * including interruptions and partial writes; 0 waits forever. Timeout
+ * fails with ETIMEDOUT. Accept does not wait; this setting does not bound
+ * hostname DNS/connect or change an explicit numeric connect budget. */
 /** regions: borrows */
 CU_MUST_USE int cu_socket_set_timeout(CuSocket *s, unsigned long ms);
 /* Reads at most cap bytes (cap >= 1) into buf, waiting for at least one.
@@ -1161,13 +1381,157 @@ CU_MUST_USE int cu_socket_set_timeout(CuSocket *s, unsigned long ms);
  * side. */
 /** regions: borrows */
 CU_MUST_USE int cu_socket_read(CuSocket *s, char *buf, size_t cap, size_t *got);
+/* One read with its own millisecond budget, without changing s's configured
+ * timeout. 0 means unlimited. Other read/error/ownership rules are unchanged. */
+/** regions: borrows */
+CU_MUST_USE int cu_socket_read_for(CuSocket *s, char *buf, size_t cap, size_t *got,
+                                 unsigned long timeout_ms);
 /** regions: borrows */
 CU_MUST_USE int cu_socket_write(CuSocket *s, CuStr bytes);
-/* Closes s. Idempotent, as cu_append_close. */
+/* Closes s. Idempotent, as cu_append_close. Failed sockets replay their
+ * saved error in errno, including on repeated closes and when it is zero. */
 /** regions: borrows */
 CU_MUST_USE int cu_socket_close(CuSocket *s);
 /** regions: borrows */
 int cu_socket_errno(const CuSocket *s);
+
+/* ---- Borrowed readers --------------------------------------------------
+ * Blocking byte input over memory or a socket. No allocation, buffering,
+ * ownership transfer, close or timeout-setting changes. Keep the owner and
+ * source bytes alive, serialize access, do not copy an active reader, and
+ * do not use the owner outside this view. END and ERROR are sticky and
+ * publish *n == 0; DATA publishes 1..cap bytes. Invalid arguments abort.
+ * Socket readers start one positive, monotonic millisecond budget when
+ * bound; all subsequent reads, including caller pauses, share it. This is
+ * not a hard real-time guarantee. Failure may consume unpublished bytes.
+ * Memory readers have no time budget. Overlapping output uses memmove;
+ * overwriting unread source bytes changes subsequent reads. File streams
+ * are not adapted: blocking stdio cannot enforce this deadline contract. */
+typedef struct CuReader {
+    enum { CU_READER_MEMORY, CU_READER_SOCKET } kind;
+    union { CuStr memory; CuSocket *socket; } source;
+    CuInputStatus state;
+    int error;
+    unsigned long started_sec;
+    unsigned long started_nsec;
+    unsigned long timeout_ms;
+} CuReader;
+
+/* Retains bytes until the reader is abandoned. Empty may have a NULL ptr.
+ * Rebinding abandons the old view without closing its owner. */
+void cu_reader_memory(CuReader *r, CuStr bytes);
+/* s must be initialized, open and not listening/watched; timeout_ms > 0.
+ * Returns 1, or 0 with a sticky saved errno, including clock errors or
+ * ENOSYS without socket/monotonic-clock support. Does not close s. */
+CU_MUST_USE int cu_reader_socket(CuReader *r, CuSocket *s, unsigned long timeout_ms);
+/** regions: borrows */
+CU_MUST_USE CuInputStatus cu_reader_read(CuReader *r, void *buf, size_t cap, size_t *n);
+/** regions: borrows */
+int cu_reader_errno(const CuReader *r);
+
+/* ---- HTTP request framing ----------------------------------------------
+ * Strict HTTP/1.1 origin-form requests with one nonempty Host and optional
+ * single decimal Content-Length. No Content-Length means an empty body.
+ * Rejects duplicate Content-Length, comma lists, bare LF, obs-fold,
+ * whitespace before colons, non-ASCII/control bytes in the head, and
+ * Transfer-Encoding. Expect, Upgrade and CONNECT are unsupported too.
+ * This slice is NOT a complete/conforming HTTP/1.1 server: chunked input,
+ * URI/Host authority validation and routing are absent. Response heads have
+ * a separate restricted serializer below; delivery/body policy remains external.
+ * Never forward its raw headers as a validated proxy request.
+ *
+ * All limits are caller-supplied; no allocation or read-ahead. Head reading
+ * currently requests one byte at a time to preserve the underlying cursor.
+ * Body reads are chunked and stop exactly at Content-Length. Memory/socket
+ * input uses the same parser. Bind the socket reader before begin so its
+ * single budget covers the head, body and pauses between public calls.
+ * Only a completely consumed successful request may be followed by another
+ * on the same reader. After any error, discard the connection, not just the
+ * malformed request. Already published body bytes cannot be rolled back.
+ * The caller keeps reader/head storage alive and exclusively owned. Body
+ * buffers must not overwrite head storage while using its metadata. */
+typedef enum CuHttpResult {
+    CU_HTTP_IO = -5,
+    CU_HTTP_UNSUPPORTED = -4,
+    CU_HTTP_TRUNCATED = -3,
+    CU_HTTP_LIMIT = -2,
+    CU_HTTP_BAD_REQUEST = -1,
+    CU_HTTP_END = 0,
+    CU_HTTP_OK = 1
+} CuHttpResult;
+
+typedef struct CuHttpRequest {
+    CuReader *reader;
+    CuStr method;
+    CuStr target;
+    CuStr head;
+    size_t body_length;
+    size_t remaining;
+    CuHttpResult state;
+    int error; /* underlying saved errno for CU_HTTP_IO, possibly zero */
+} CuHttpRequest;
+
+/* Reads/validates a head into caller storage. cap > 0 bounds its total
+ * bytes, including CRLFCRLF; max_fields bounds field count and max_body
+ * bounds Content-Length. Positive cap and non-NULL pointers are required.
+ * On error the head buffer may be partially written but metadata is empty.
+ * END means clean EOF before any head bytes. OK publishes borrowed views
+ * into head, valid until the caller overwrites it. */
+CU_MUST_USE CuHttpResult cu_http_begin(CuHttpRequest *r, CuReader *reader,
+                                     char *head, size_t cap, size_t max_fields,
+                                     size_t max_body);
+/* cap > 0. OK publishes 1..cap body bytes; END publishes zero at the exact
+ * body boundary. Errors are sticky, publish zero and never read again.
+ * Early source EOF is TRUNCATED. A body is complete only at remaining==0.
+ * IO preserves the reader's errno, including ETIMEDOUT and zero. */
+/** regions: borrows */
+CU_MUST_USE CuHttpResult cu_http_read(CuHttpRequest *r, void *buf, size_t cap, size_t *n);
+/** regions: borrows */
+int cu_http_errno(const CuHttpRequest *r);
+
+/* ---- Restricted HTTP response heads -----------------------------------
+ * Pure, allocation-free HTTP/1.1 head serialization. Status is 200..599;
+ * canonical phrases are supplied for common codes, otherwise empty. Always
+ * emits Connection: close and (except 204/304) exactly one Content-Length.
+ * 204/205/304 require body_length==0; 204/304 omit Content-Length. A 304 zero
+ * is a profile sentinel, not the selected representation's size.
+ *
+ * Header names are nonempty ASCII tokens. Values may be empty; otherwise
+ * visible ASCII with internal SP/HTAB, no edge whitespace or other controls.
+ * Case-insensitive Content-Length, Transfer-Encoding, Connection, Trailer,
+ * Upgrade, TE, Keep-Alive and Proxy-Connection are owned/unsupported and rejected.
+ * Other field-specific grammar, duplicate-field semantics, Date/status-required
+ * metadata and application policy remain caller obligations.
+ *
+ * This writes HEAD BYTES ONLY, ending CRLFCRLF, never a body or terminator.
+ * For ordinary responses the caller must send exactly body_length bytes;
+ * for HEAD it is the selected GET representation length and no body is sent.
+ * Never send a body for 204/205/304 or use this for a successful CONNECT.
+ * Close after the response and do not process another request on that socket.
+ * No network state, deadline or errno changes; not a complete HTTP server.
+ *
+ * Inputs are borrowed only during the call. All views/vectors must be valid,
+ * stable and disjoint from output storage and written. headers may be NULL
+ * only for count==0; head may be NULL only for cap==0. written is required.
+ * On any failure *written==0 and head is unchanged; LIMIT includes size
+ * arithmetic overflow. OK writes exactly *written<=cap bytes, no trailing NUL.
+ * Compare the result explicitly, not as a boolean. Required NULL-pointer
+ * misuse aborts; other storage/length validity remains the caller's duty. */
+typedef struct CuHttpHeader {
+    CuStr name;
+    CuStr value;
+} CuHttpHeader;
+
+typedef enum CuHttpResponseResult {
+    CU_HTTP_RESPONSE_INVALID = -2,
+    CU_HTTP_RESPONSE_LIMIT = -1,
+    CU_HTTP_RESPONSE_OK = 1
+} CuHttpResponseResult;
+
+CU_MUST_USE CuHttpResponseResult cu_http_response_head(char *head, size_t cap,
+                                                      unsigned status, size_t body_length,
+                                                      const CuHttpHeader *headers, size_t count,
+                                                      size_t *written);
 
 /* ---- Poller ------------------------------------------------------------
  *

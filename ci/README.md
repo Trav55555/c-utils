@@ -29,7 +29,14 @@ its settings before invoking the API client, rejects unsafe archives, and
 checks the extracted tree. It never falls back to another login or transport.
 
 The deep workflow retains its checker profile validation, regions build,
-3 GiB memory limit, disabled swap, timeouts, and complete deep-check workload.
+3 GiB memory limit, disabled swap, 2,400-second aggregate timeout, and complete
+deep-check workload. It calls the same `tools/verify_deep.py` scope runner as
+`make deep`. The scope kills all its processes at the deadline, including
+new process groups and SIGTERM-ignoring children. The runner also rejects
+leftover children after a successful checker exit. Public workflow tests report
+live cases as skipped if the user systemd manager or required Linux APIs are
+unavailable. Trusted private CI sets `VERIFY_REQUIRE_SCOPE=1`, so missing live
+scope prerequisites fail that job instead. Offline cleanup/error tests always run.
 Variable configuration does not replace repository access controls or runner
 isolation. Run an authorized CI push after configuration to verify routing and
 execution. Offline tests check the workflow's guard structure but do not prove

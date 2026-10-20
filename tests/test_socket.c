@@ -1,3 +1,6 @@
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
 #include "death.h"
 #include <assert.h>
 #include <errno.h>
@@ -26,6 +29,28 @@ int main(void)
     return 0;
 }
 #else
+
+#include <signal.h>
+#include <sys/time.h>
+#include <sys/socket.h>
+#include <limits.h>
+#include <time.h>
+
+static volatile sig_atomic_t ticks;
+
+static void tick(int sig)
+{
+    struct itimerval stop;
+
+    (void)sig;
+    ticks++;
+    if (ticks == 30) {
+        stop.it_value.tv_sec = 0;
+        stop.it_value.tv_usec = 0;
+        stop.it_interval = stop.it_value;
+        (void)setitimer(ITIMER_REAL, &stop, NULL);
+    }
+}
 
 /* A listener on a free loopback port, a client connected to it and the
  * server's side of that connection. */
@@ -86,6 +111,8 @@ static void test_round_trip(void)
     size_t got;
 
     pair_open(&p);
+    assert(p.client.timeout_ms == 0 && p.server.timeout_ms == 0);
+    assert(cu_socket_set_timeout(&p.server, ULONG_MAX));
     assert(cu_socket_write(&p.client, cu_str_cstr("hello")));
     read_exactly(&p.server, buf, 5);
     assert(memcmp(buf, "hello", 5) == 0);
@@ -165,6 +192,58 @@ static void test_timeout(void)
     assert(cu_socket_set_timeout(&p.client, 0));
     assert(cu_socket_close(&p.client));
     assert(cu_socket_close(&p.listener));
+}
+
+/* Repeated signals must not restart a public call's budget. */
+static void test_signal_timeout(int writing)
+{
+    Pair p;
+    struct sigaction sa;
+    struct sigaction old;
+    struct itimerval timer;
+    struct timespec start;
+    struct timespec end;
+    char buf[1];
+    size_t got;
+    double elapsed;
+    char *bytes;
+    int small;
+
+    bytes = (char *)malloc(BIG);
+    assert(bytes != NULL);
+    memset(bytes, 'x', BIG);
+    pair_open(&p);
+    small = 4096;
+    assert(setsockopt(p.server.fd, SOL_SOCKET, SO_SNDBUF,
+                     &small, sizeof small) == 0);
+    sa.sa_handler = tick;
+    sa.sa_flags = 0;
+    sigemptyset(&sa.sa_mask);
+    assert(sigaction(SIGALRM, &sa, &old) == 0);
+    timer.it_value.tv_sec = 0;
+    timer.it_value.tv_usec = 10000;
+    timer.it_interval = timer.it_value;
+    ticks = 0;
+    assert(cu_socket_set_timeout(&p.server, 60));
+    assert(clock_gettime(CLOCK_MONOTONIC, &start) == 0);
+    assert(setitimer(ITIMER_REAL, &timer, NULL) == 0);
+    if (writing)
+        assert(!cu_socket_write(&p.server, cu_str_n(bytes, BIG)));
+    else
+        assert(!cu_socket_read(&p.server, buf, sizeof buf, &got));
+    assert(clock_gettime(CLOCK_MONOTONIC, &end) == 0);
+    timer.it_value.tv_sec = 0;
+    timer.it_value.tv_usec = 0;
+    timer.it_interval = timer.it_value;
+    assert(setitimer(ITIMER_REAL, &timer, NULL) == 0);
+    assert(sigaction(SIGALRM, &old, NULL) == 0);
+    elapsed = (double)(end.tv_sec - start.tv_sec) +
+        (double)(end.tv_nsec - start.tv_nsec) / 1000000000.0;
+    assert(ticks >= 2);
+    assert(elapsed >= 0.05 && elapsed < 0.25);
+    free(bytes);
+    assert(cu_socket_errno(&p.server) == ETIMEDOUT);
+    pair_close(&p);
 }
 
 /* A peer that stops reading makes a write wait; past the limit it fails
@@ -533,6 +612,16 @@ static void read_listener(void)
     (void)ok;
 }
 
+static void accept_alias(void)
+{
+    Pair p;
+    int ok;
+
+    pair_open(&p);
+    ok = cu_socket_accept(&p.listener, &p.listener);
+    (void)ok;
+}
+
 static void accept_on_connection(void)
 {
     Pair p;
@@ -598,6 +687,7 @@ static void close_while_watched(void)
 
 static void death_tests(void)
 {
+    expect_abort(accept_alias);
     expect_abort(add_twice);
     expect_abort(close_while_watched);
     expect_abort(listen_null);
@@ -615,6 +705,8 @@ int main(void)
     test_round_trip();
     test_large_transfer();
     test_timeout();
+    test_signal_timeout(0);
+    test_signal_timeout(1);
     test_write_timeout();
     test_accept_nothing_waiting();
     test_peer_gone();
