@@ -29,6 +29,7 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(argv[-4:], ["--", *command])
             self.assertIn("--scope", argv)
             self.assertIn("--collect", argv)
+            self.assertIn("--expand-environment=no", argv)
 
     def test_normal_status_is_preserved(self):
         for status in [0, 7]:
@@ -288,7 +289,8 @@ class ScopeTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_literal_argument_roundtrip(self):
-        arguments = ["$HOME", "${USER}", "$$", "; not a shell", "space here", ""]
+        arguments = ["$HOME", "${USER}", "$$", "$__CU_VERIFY_LITERAL_MISSING__",
+                     "%n", "%%", "$(not-a-command)", "; not a shell", "space here", ""]
         result = subprocess.run([sys.executable, str(RUNNER), "--seconds", "5", "--",
                                  sys.executable, "-c", "import json,sys; print(json.dumps(sys.argv[1:]))",
                                  *arguments], capture_output=True, text=True, timeout=8)

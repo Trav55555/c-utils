@@ -11,7 +11,7 @@ import uuid
 
 def scope_command(unit, seconds, command):
     return ["systemd-run", "--user", "--scope", "--quiet", "--collect",
-            "--unit=" + unit, "-p", "MemoryMax=3G", "-p", "MemorySwapMax=0",
+            "--expand-environment=no", "--unit=" + unit, "-p", "MemoryMax=3G", "-p", "MemorySwapMax=0",
             "-p", "RuntimeMaxSec=" + str(seconds), "-p", "KillSignal=SIGKILL",
             "--", *command]
 
