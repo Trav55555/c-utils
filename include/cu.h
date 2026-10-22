@@ -434,6 +434,32 @@ void cu_sha256_final(CuSha256 *h, unsigned char digest[32]);
 /** regions: borrows */
 void cu_sha256(CuStr data, unsigned char digest[32]);
 
+/* ---- SHA-1 ------------------------------------------------------------- */
+
+/* FIPS 180-4 SHA-1, for the object ids git uses. SHA-1 is broken for
+ * collision resistance, and this has none of the collision detection git
+ * adds: use it to name objects as git does, never to trust that equal
+ * digests mean equal content. Same contract as SHA-256 above: updates
+ * between init and final, final finishes the hasher, misuse aborts, and a
+ * message of 2^61 bytes or more aborts. */
+typedef struct CuSha1 {
+    unsigned long state[5];
+    CuU64 len; /* bytes hashed so far */
+    unsigned char block[64];
+    size_t used; /* bytes waiting in block */
+    int done;
+} CuSha1;
+
+/** regions: borrows */
+void cu_sha1_init(CuSha1 *h);
+/** regions: borrows */
+void cu_sha1_update(CuSha1 *h, CuStr data);
+/** regions: borrows */
+void cu_sha1_final(CuSha1 *h, unsigned char digest[20]);
+/* init, one update and final. */
+/** regions: borrows */
+void cu_sha1(CuStr data, unsigned char digest[20]);
+
 /* ---- Growable array ---------------------------------------------------- */
 
 /* Elements of one type, stored in an arena. Use the CU_VEC_* macros: each

@@ -101,6 +101,7 @@ return values, scope rules, and pointer validity. These are the main groups:
 | Hold and check 64-bit unsigned values in C89 | `CuU64`, `cu_u64_add`, `cu_u64_sub`, `cu_u64_cmp` |
 | Read and write binary integers | Unsigned 8-, 16-, 32- and 64-bit readers and builder appends; explicit byte order |
 | Hash content for addressing (not for secrets) | `CuSha256`, `cu_sha256` |
+| Name objects as git does (SHA-1; not collision resistant) | `CuSha1`, `cu_sha1` |
 | Grow an array or view its elements | `CuVec`, `CuSlice` |
 | Map strings to values | `CuMap`; copied keys, stable entries, insertion-order iteration, no removal |
 | Remove objects without following stale handles | `CuPool`; one value type, generational handles |
