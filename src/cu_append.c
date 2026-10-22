@@ -302,10 +302,12 @@ int cu_dir_make(const char *path)
 
 int cu_dir_sync(const char *path)
 {
+#ifndef __wasi__
     int fd;
     int ok;
     int saved;
     int flags;
+#endif
 
     check_path(path);
 #ifdef __wasi__

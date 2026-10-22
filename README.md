@@ -246,6 +246,21 @@ On older glibc, pass the pthread flag through `CFLAGS`:
 make test CC=gcc CFLAGS='-g -pthread'
 ```
 
+### Strict WASI checks
+
+With Zig, Wasmtime, Python 3, Linux cgroup v2, and a working user systemd manager:
+
+```sh
+make test-wasi-strict
+```
+
+Each run rebuilds and links the full library into `curun` and three focused tests
+using `-std=c89 -pedantic-errors -Wall -Wextra -Werror`. It checks append behavior,
+unsupported process APIs returning `ENOSYS`, and the CLI's help and unsupported
+execution paths. It does not add native subprocess support to WASI. The check
+has a 300-second whole-tree limit, 3 GiB of memory, and no swap. Missing tools
+report SKIP and fail the Make target rather than being counted as a pass.
+
 ### Command-runner consumer
 
 On Linux, build the bounded subprocess CLI with the same C89 compiler flags:
@@ -286,6 +301,10 @@ set `DCHECK` to your local executable:
 make check DCHECK=/path/to/dcheck
 make deep DCHECK=/path/to/dcheck
 ```
+
+If the toolchain provides `bin/dcheck-tools`, prefix these commands with
+`/path/to/toolchain/bin/dcheck-tools exec` to validate and select its qualified
+runtime rather than an ambient interpreter installation.
 
 `check` runs the configured subset and lint checks, compiler matrix,
 analyzers, sanitizers, optimized build, WASI checks, and coverage gate.

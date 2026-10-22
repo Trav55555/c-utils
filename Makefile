@@ -1,6 +1,7 @@
 DCHECK ?= $(HOME)/projects/dependable-c-agent-toolchain/bin/dcheck
 PYTHON ?= python3
 DEEP_SECONDS ?= 1800
+WASI_SECONDS ?= 300
 
 # make test needs only a C compiler; check needs dcheck. Deep also needs
 # Python 3 and Linux cgroup v2 with a working user systemd manager. The
@@ -10,7 +11,7 @@ CFLAGS ?= -g
 BUILD ?= build
 TESTS := $(patsubst tests/%.c,$(BUILD)/%,$(wildcard tests/test_*.c))
 
-.PHONY: check deep test curun test-curun cuhealth test-cuhealth
+.PHONY: check deep test curun test-curun test-wasi-strict cuhealth test-cuhealth
 check:
 	$(DCHECK) gate
 deep:
@@ -22,6 +23,8 @@ curun:
 	$(MAKE) -C examples/curun BUILD="$(abspath $(BUILD))" curun
 test-curun:
 	$(MAKE) -C examples/curun BUILD="$(abspath $(BUILD))" test
+test-wasi-strict:
+	$(PYTHON) -I tools/verify_deep.py --seconds "$(WASI_SECONDS)" -- $(PYTHON) -I tests/wasi_strict.py --build "$(abspath $(BUILD))/wasi"
 cuhealth:
 	$(MAKE) -C examples/cuhealth BUILD="$(abspath $(BUILD))" all
 test-cuhealth:
