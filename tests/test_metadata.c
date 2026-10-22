@@ -25,6 +25,22 @@ int main(void)
     assert(info.kind == CU_DIR_LINK && info.size.hi == 1 && info.size.lo == 9);
     assert(cu_fd_info(-1, &info) == CU_INFO_ERROR);
     assert(info.kind == CU_DIR_LINK && info.size.hi == 1 && info.size.lo == 9);
+    {
+        CuArena arena;
+        CuDir dir;
+        cu_arena_init(&arena);
+        (void)cu_dir_open(&dir, &arena, ".");
+        errno = 0;
+        assert(cu_dir_info(&dir, "x", CU_PATH_FOLLOW, &info) == CU_INFO_ERROR);
+#ifdef ENOSYS
+        assert(errno == ENOSYS);
+#else
+        assert(errno == EINVAL);
+#endif
+        assert(info.kind == CU_DIR_LINK && info.size.hi == 1 && info.size.lo == 9);
+        cu_dir_close(&dir);
+        cu_arena_release(&arena);
+    }
     return 0;
 }
 #else
@@ -128,6 +144,85 @@ static void test_paths(void)
     assert(rmdir(directory) == 0 && unlink(empty) == 0 && unlink(file) == 0);
 }
 
+/* cu_dir_info agrees with cu_path_info for names inside an open listing,
+ * and refuses a listing that is closed or never opened. */
+static void dir_expect(const CuDir *dir, const char *name, CuPathFollow follow)
+{
+    char path[600];
+    CuFileInfo by_path;
+    CuFileInfo by_dir;
+
+    path_of(path, name);
+    by_path.kind = CU_DIR_OTHER; by_path.size = cu_u64(1, 9);
+    by_dir = by_path;
+    assert(cu_path_info(path, follow, &by_path) == CU_INFO_OK);
+    assert(cu_dir_info(dir, name, follow, &by_dir) == CU_INFO_OK);
+    assert(by_dir.kind == by_path.kind && by_dir.size.hi == by_path.size.hi &&
+           by_dir.size.lo == by_path.size.lo);
+}
+
+static void test_dir_relative(void)
+{
+    char file[600];
+    char directory[600];
+    char nested[600];
+    char link[600];
+    char dangling[600];
+    char loop[600];
+    char missing[600];
+    CuArena arena;
+    CuDir dir;
+    CuFileInfo info;
+
+    path_of(file, "file"); path_of(directory, "dir"); path_of(nested, "dir/nested");
+    path_of(link, "link"); path_of(dangling, "dangling"); path_of(loop, "loop");
+    path_of(missing, "absent-dir");
+    write_file(file, original, sizeof original);
+    assert(mkdir(directory, 0700) == 0);
+    write_file(nested, "xyz", 3);
+    assert(symlink("file", link) == 0);
+    assert(symlink("missing-target", dangling) == 0);
+    assert(symlink("loop", loop) == 0);
+    cu_arena_init(&arena);
+    assert(cu_dir_open(&dir, &arena, root));
+    dir_expect(&dir, "file", CU_PATH_NOFOLLOW);
+    dir_expect(&dir, "dir", CU_PATH_NOFOLLOW);
+    dir_expect(&dir, "dir/nested", CU_PATH_FOLLOW);
+    dir_expect(&dir, "link", CU_PATH_NOFOLLOW);
+    dir_expect(&dir, "link", CU_PATH_FOLLOW);
+    dir_expect(&dir, "dangling", CU_PATH_NOFOLLOW);
+    info.kind = CU_DIR_LINK; info.size = cu_u64(123, 456);
+    errno = 0;
+    assert(cu_dir_info(&dir, "dangling", CU_PATH_FOLLOW, &info) == CU_INFO_MISSING);
+    assert(errno == ENOENT); unchanged(&info);
+    assert(cu_dir_info(&dir, "absent", CU_PATH_NOFOLLOW, &info) == CU_INFO_MISSING);
+    assert(errno == ENOENT); unchanged(&info);
+    assert(cu_dir_info(&dir, "file/child", CU_PATH_NOFOLLOW, &info) == CU_INFO_ERROR);
+    assert(errno == ENOTDIR); unchanged(&info);
+    assert(cu_dir_info(&dir, "loop", CU_PATH_FOLLOW, &info) == CU_INFO_ERROR);
+    assert(errno == ELOOP); unchanged(&info);
+    /* Lookups neither consume nor disturb the listing. */
+    {
+        CuDirEntry entry;
+        int seen;
+        seen = 0;
+        while (cu_dir_next(&dir, &entry) == 1)
+            ++seen;
+        assert(seen == 5);
+    }
+    cu_dir_close(&dir);
+    errno = 0;
+    assert(cu_dir_info(&dir, "file", CU_PATH_NOFOLLOW, &info) == CU_INFO_ERROR);
+    assert(errno == EBADF); unchanged(&info);
+    assert(!cu_dir_open(&dir, &arena, missing));
+    errno = 0;
+    assert(cu_dir_info(&dir, "file", CU_PATH_NOFOLLOW, &info) == CU_INFO_ERROR);
+    assert(errno == EBADF); unchanged(&info);
+    cu_arena_release(&arena);
+    assert(unlink(loop) == 0 && unlink(dangling) == 0 && unlink(link) == 0);
+    assert(unlink(nested) == 0 && rmdir(directory) == 0 && unlink(file) == 0);
+}
+
 static void test_open_object(void)
 {
     char file[600];
@@ -219,6 +314,7 @@ int main(void)
     }
     assert(i < 1000);
     test_paths();
+    test_dir_relative();
     test_open_object();
     test_size();
 #ifndef __wasi__

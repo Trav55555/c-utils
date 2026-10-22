@@ -34,10 +34,22 @@ CuInfoResult cu_fd_info(int fd, CuFileInfo *out)
     return CU_INFO_ERROR;
 }
 
+CuInfoResult cu_dir_info(const CuDir *d, const char *name, CuPathFollow follow,
+                         CuFileInfo *out)
+{
+    if (d == NULL || name == NULL || out == NULL || name[0] == '\0' || name[0] == '/' ||
+        (follow != CU_PATH_NOFOLLOW && follow != CU_PATH_FOLLOW))
+        abort();
+    errno = ENOSYS;
+    return CU_INFO_ERROR;
+}
+
 #else
 
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <dirent.h>
+#include <fcntl.h>
 
 /* Extract exactly eight base-256 digits before testing for a remainder.
  * Only a single digit is narrowed; off_t need not fit unsigned long or
@@ -119,6 +131,27 @@ CuInfoResult cu_fd_info(int fd, CuFileInfo *out)
         abort();
     if (fstat(fd, &st) != 0)
         return CU_INFO_ERROR;
+    return stat_info(&st, out);
+}
+
+CuInfoResult cu_dir_info(const CuDir *d, const char *name, CuPathFollow follow,
+                         CuFileInfo *out)
+{
+    struct stat st;
+    int fd;
+
+    if (d == NULL || name == NULL || out == NULL || name[0] == '\0' || name[0] == '/' ||
+        (follow != CU_PATH_NOFOLLOW && follow != CU_PATH_FOLLOW))
+        abort();
+    if (d->state != 1 || d->handle == NULL) {
+        errno = EBADF;
+        return CU_INFO_ERROR;
+    }
+    fd = dirfd((DIR *)d->handle);
+    if (fd < 0)
+        return CU_INFO_ERROR;
+    if (fstatat(fd, name, &st, follow == CU_PATH_FOLLOW ? 0 : AT_SYMLINK_NOFOLLOW) != 0)
+        return errno == ENOENT ? CU_INFO_MISSING : CU_INFO_ERROR;
     return stat_info(&st, out);
 }
 

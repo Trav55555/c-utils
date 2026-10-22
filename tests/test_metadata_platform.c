@@ -18,7 +18,10 @@ int main(void) { return 0; }
 
 #define cu_path_info path_info_probe
 #define cu_fd_info fd_info_probe
+#define cu_dir_info dir_info_probe
 #include "cu.h"
+#include <dirent.h>
+#include <fcntl.h>
 
 static int operation;
 static int calls;
@@ -58,6 +61,25 @@ static int fstat_probe(int fd, struct stat *out)
     return fill(out, 3);
 }
 
+static int dir_fd = 23;
+static int at_flags;
+
+static int dirfd_probe(DIR *d)
+{
+    assert(d != NULL);
+    if (dir_fd < 0) errno = EINVAL;
+    return dir_fd;
+}
+
+static int fstatat_probe(int fd, const char *name, struct stat *out, int flags)
+{
+    assert(fd == 23 && strcmp(name, "fixture") == 0);
+    at_flags = flags;
+    return fill(out, flags == AT_SYMLINK_NOFOLLOW ? 4 : 5);
+}
+
+#define dirfd(d) dirfd_probe(d)
+#define fstatat(f, n, s, g) fstatat_probe((f), (n), (s), (g))
 #define stat(p, s) stat_probe((p), (s))
 #define lstat(p, s) lstat_probe((p), (s))
 #define fstat(f, s) fstat_probe((f), (s))
@@ -65,6 +87,8 @@ static int fstat_probe(int fd, struct stat *out)
 #undef stat
 #undef lstat
 #undef fstat
+#undef fstatat
+#undef dirfd
 
 static void reset(void)
 {
@@ -107,6 +131,46 @@ static void test_errors(void)
         assert(fd_info_probe(17, &out) == CU_INFO_ERROR);
         assert(errno == errors[i] && operation == 3 && calls == 1); same(&out);
     }
+}
+
+/* The relative lookup maps every errno exactly as the path lookup does,
+ * passes the follow mode to fstatat, and refuses a listing that is not open
+ * or whose descriptor cannot be had, without touching the output. */
+static void test_dir_relative(void)
+{
+    static const int errors[] = {ENOENT, ENOTDIR, ELOOP, EACCES, EIO, 0};
+    static char stream;
+    CuDir d;
+    CuFileInfo out;
+    CuInfoResult result;
+    size_t i;
+
+    d.handle = &stream; d.arena = NULL; d.state = 1; d.error = 0;
+    for (i = 0; i < sizeof errors / sizeof errors[0]; i++) {
+        reset(); fails = 1; failure = errors[i]; sentinel(&out); errno = EBUSY;
+        result = dir_info_probe(&d, "fixture", CU_PATH_NOFOLLOW, &out);
+        assert(result == (errors[i] == ENOENT ? CU_INFO_MISSING : CU_INFO_ERROR));
+        assert(errno == errors[i] && operation == 4 && calls == 1); same(&out);
+        assert(at_flags == AT_SYMLINK_NOFOLLOW);
+        calls = 0; errno = EBUSY;
+        result = dir_info_probe(&d, "fixture", CU_PATH_FOLLOW, &out);
+        assert(result == (errors[i] == ENOENT ? CU_INFO_MISSING : CU_INFO_ERROR));
+        assert(errno == errors[i] && operation == 5 && calls == 1); same(&out);
+        assert(at_flags == 0);
+    }
+    reset(); mode = S_IFDIR; sentinel(&out);
+    assert(dir_info_probe(&d, "fixture", CU_PATH_NOFOLLOW, &out) == CU_INFO_OK);
+    assert(out.kind == CU_DIR_DIR && calls == 1);
+    reset(); d.state = 0; sentinel(&out); errno = 0;
+    assert(dir_info_probe(&d, "fixture", CU_PATH_NOFOLLOW, &out) == CU_INFO_ERROR);
+    assert(errno == EBADF && calls == 0); same(&out);
+    d.state = 1; d.handle = NULL; errno = 0;
+    assert(dir_info_probe(&d, "fixture", CU_PATH_NOFOLLOW, &out) == CU_INFO_ERROR);
+    assert(errno == EBADF && calls == 0); same(&out);
+    d.handle = &stream; dir_fd = -1; errno = 0;
+    assert(dir_info_probe(&d, "fixture", CU_PATH_NOFOLLOW, &out) == CU_INFO_ERROR);
+    assert(errno == EINVAL && calls == 0); same(&out);
+    dir_fd = 23;
 }
 
 static void expect_size(unsigned long hi, unsigned long lo)
@@ -157,16 +221,25 @@ static void test_values(void)
 static int invalid;
 static void invalid_arguments(void)
 {
+    static char stream;
+    CuDir d;
     CuFileInfo out;
     CuInfoResult result;
 
     reset();
+    d.handle = &stream; d.arena = NULL; d.state = 1; d.error = 0;
     result = CU_INFO_OK;
     switch (invalid) {
     case 0: result = path_info_probe(NULL, CU_PATH_FOLLOW, &out); break;
     case 1: result = path_info_probe("fixture", CU_PATH_FOLLOW, NULL); break;
     case 2: result = path_info_probe("fixture", (CuPathFollow)-1, &out); break;
     case 3: result = fd_info_probe(17, NULL); break;
+    case 4: result = dir_info_probe(NULL, "fixture", CU_PATH_FOLLOW, &out); break;
+    case 5: result = dir_info_probe(&d, NULL, CU_PATH_FOLLOW, &out); break;
+    case 6: result = dir_info_probe(&d, "", CU_PATH_FOLLOW, &out); break;
+    case 7: result = dir_info_probe(&d, "/fixture", CU_PATH_FOLLOW, &out); break;
+    case 8: result = dir_info_probe(&d, "fixture", (CuPathFollow)-1, &out); break;
+    case 9: result = dir_info_probe(&d, "fixture", CU_PATH_FOLLOW, NULL); break;
     }
     (void)result;
 }
@@ -175,9 +248,10 @@ static void invalid_arguments(void)
 int main(void)
 {
     test_errors();
+    test_dir_relative();
     test_values();
 #ifdef CU_DEATH_TESTS
-    for (invalid = 0; invalid < 4; invalid++) expect_abort(invalid_arguments);
+    for (invalid = 0; invalid < 10; invalid++) expect_abort(invalid_arguments);
 #endif
     return 0;
 }
