@@ -107,7 +107,7 @@ return values, scope rules, and pointer validity. These are the main groups:
 | Link nodes of several kinds, including cycles | `CuPlex`; kind-checked generational links |
 | Read files or streams | `cu_file_read`, `cu_stream_read`, chunked `CuInput` |
 | List one directory's entries | `CuDir` |
-| Inspect a path or an already-open file, with explicit symlink policy | `CuFileInfo`, `cu_path_info`, `cu_fd_info`; [semantics and example](docs/METADATA.md) |
+| Inspect a path or an already-open file, with explicit symlink policy | `CuFileInfo`, `cu_path_info`, `cu_fd_info`, `cu_dir_info`; [semantics and example](docs/METADATA.md) |
 | Write files durably: append, sync, truncate, lock; rename, remove, make and sync directories | `CuAppend`, `cu_path_rename`, `cu_dir_sync` |
 | Start and join threads, synchronize | `CuThread`, `CuMutex`, `CuCond` |
 | Run bounded task batches with cooperative cancellation and one deadline | `CuTaskSpec`, `cu_tasks_run`; [ownership and example](docs/TASKS.md) |
