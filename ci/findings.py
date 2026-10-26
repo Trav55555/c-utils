@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Judge a nightly run from dcheck's JSON result and keep its findings issue.
 
-A run passes when dcheck's result passes and every --require check is among
-its passes, so a required check cannot pass by being skipped. Each failed
+A run passes when its acceptance exited 0, dcheck's result passes and every
+--require check is among its passes, so a required check cannot pass by
+being skipped. Each failed
 check becomes a finding: its diagnostics (file, line, rule) and the end of its
 log. One open issue titled TITLE holds the current findings: a failing run
 opens it or replaces its body and comments, and a passing run comments and
@@ -38,11 +39,11 @@ def load_result(path):
     return result
 
 
-def judge(result, required):
+def judge(result, required, exit_status=0):
     """(passed, reasons): the verdict and why a failing run failed."""
+    reasons = ["acceptance exited %d" % exit_status] if exit_status else []
     if result is None:
-        return False, ["no dcheck result: the run stopped before dcheck finished"]
-    reasons = []
+        return False, reasons + ["no dcheck result: the run stopped before dcheck finished"]
     if result.get("status") != "pass":
         reasons.append("dcheck %s: %s" % (result.get("tier", "?"), ", ".join(result.get("failed", [])) or "fail"))
     passed = {c.get("name") for c in result.get("checks", []) if c.get("status") == "pass"}
@@ -164,6 +165,7 @@ def main(argv=None):
     parser.add_argument("--root", required=True, help="directory the result's log paths are relative to")
     parser.add_argument("--require", action="append", default=[], help="a check that must pass")
     parser.add_argument("--log", help="the run's own log, quoted when no check failed")
+    parser.add_argument("--exit-status", type=int, default=0, help="the acceptance run's exit status")
     parser.add_argument("--rev", required=True)
     parser.add_argument("--run-url", required=True)
     parser.add_argument("--login", help="tea login; without it the issue is left alone")
@@ -171,7 +173,7 @@ def main(argv=None):
     parser.add_argument("--attempts", type=int, default=1)
     args = parser.parse_args(argv)
     result = load_result(args.result)
-    passed, reasons = judge(result, args.require)
+    passed, reasons = judge(result, args.require, args.exit_status)
     body = report(result, reasons, args.root, args.rev, args.run_url, args.log)
     # dcheck --json prints no summary of its own; the job log gets this one.
     for check in (result or {}).get("checks", []):

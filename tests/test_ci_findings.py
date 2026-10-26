@@ -161,6 +161,8 @@ class MainTests(unittest.TestCase):
         self.path.write_text(json.dumps(result("pass", [REGIONS])))
         self.assertEqual(self.main(self.base), 0)
         self.assertEqual(self.main(self.base + ["--require", "cbmc"]), 1)
+        # A failure outside dcheck (a leftover process, make itself) is a finding too.
+        self.assertEqual(self.main(self.base + ["--exit-status", "2"]), 1)
         self.path.write_text("not json")
         self.assertEqual(self.main(self.base), 1)
 

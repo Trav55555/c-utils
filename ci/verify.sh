@@ -66,7 +66,7 @@ exec 9>&-
 # skipped. The exit status is the verdict; a failed issue update is only logged.
 verdict=0
 python3 -I "$root/ci/findings.py" --result "$work/result.json" --root "$work/c-utils" \
-    --require regions --log "$root/ci-artifacts/deep.log" --rev "$(git -C "$root" rev-parse HEAD)" \
+    --require regions --log "$root/ci-artifacts/deep.log" --exit-status "$status" --rev "$(git -C "$root" rev-parse HEAD)" \
     --run-url "${GITHUB_SERVER_URL:-}/$GITHUB_REPOSITORY/actions/runs/${GITHUB_RUN_ID:-}" \
     --login "$CUTILS_CI_API_LOGIN" --repo "$GITHUB_REPOSITORY" --attempts 5 || verdict=$?
 if [[ "$status" -ne 0 || "$verdict" -ne 0 ]]; then
