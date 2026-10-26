@@ -1073,6 +1073,16 @@ CU_MUST_USE CuInfoResult cu_path_info(const char *path, CuPathFollow follow,
  * pointer/mode validation and regardless of descriptor validity. */
 /** regions: borrows */
 CU_MUST_USE CuInfoResult cu_fd_info(int fd, CuFileInfo *out);
+/* cu_path_info for name resolved relative to an open listing d, without
+ * rebuilding the directory's path (fstatat on the stream's descriptor).
+ * name must be non-empty and relative; d must be open (cu_dir_open returned
+ * 1 and cu_dir_close has not run), otherwise ERROR/EBADF. Results, errno and
+ * NOFOLLOW scope are as for cu_path_info. Neither moves the listing nor
+ * allocates. NULL pointers, an absolute or empty name or unknown mode abort.
+ * Unsupported backends return ERROR/ENOSYS after validation. */
+/** regions: borrows */
+CU_MUST_USE CuInfoResult cu_dir_info(const CuDir *d, const char *name, CuPathFollow follow,
+                                    CuFileInfo *out);
 
 /* ---- File output ------------------------------------------------------
  *

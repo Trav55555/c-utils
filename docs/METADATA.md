@@ -1,14 +1,18 @@
 # Filesystem metadata
 
 `cu_path_info` inspects a pathname with explicit link-following behavior.
-`cu_fd_info` inspects an already-open file descriptor. Both return a small
-`CuFileInfo` without allocating library storage or taking ownership.
+`cu_fd_info` inspects an already-open file descriptor. `cu_dir_info`
+inspects a name relative to an open `CuDir` listing, without rebuilding the
+directory's path. All three return a small `CuFileInfo` without allocating
+library storage or taking ownership.
 
 ## Result and data
 
 ```c
 CuInfoResult cu_path_info(const char *path, CuPathFollow follow, CuFileInfo *out);
 CuInfoResult cu_fd_info(int fd, CuFileInfo *out);
+CuInfoResult cu_dir_info(const CuDir *d, const char *name, CuPathFollow follow,
+                         CuFileInfo *out);
 ```
 
 Compare the result explicitly. `CU_INFO_ERROR` is -1, so a boolean success test
@@ -20,7 +24,11 @@ is wrong.
 | `CU_INFO_MISSING` | Path lookup failed with ENOENT |
 | `CU_INFO_ERROR` | An OS or size-representation error occurred |
 
-Only the path operation returns MISSING. In particular, ENOTDIR, EACCES and
+Only the path and directory-relative operations return MISSING.
+`cu_dir_info` resolves a non-empty relative name against the listing's own
+directory, so it sees the directory that was opened even if its path has
+since been renamed or replaced; a closed or never-opened listing reports
+ERROR/EBADF. It does not advance or disturb the listing. In particular, ENOTDIR, EACCES and
 ELOOP are errors, not absence. An invalid descriptor reports ERROR/EBADF on a
 supported backend. Non-OK results leave every output field unchanged and
 preserve the native errno, including zero. MISSING retains ENOENT in errno.
