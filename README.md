@@ -102,6 +102,7 @@ return values, scope rules, and pointer validity. These are the main groups:
 | Read and write binary integers | Unsigned 8-, 16-, 32- and 64-bit readers and builder appends; explicit byte order |
 | Hash content for addressing (not for secrets) | `CuSha256`, `cu_sha256` |
 | Name objects as git does (SHA-1; not collision resistant) | `CuSha1`, `cu_sha1` |
+| Read and write zlib streams as git stores objects | `cu_zlib_inflate`, `cu_sb_zlib` (stored blocks only), `cu_adler32` |
 | Grow an array or view its elements | `CuVec`, `CuSlice` |
 | Map strings to values | `CuMap`; copied keys, stable entries, insertion-order iteration, no removal |
 | Remove objects without following stale handles | `CuPool`; one value type, generational handles |

@@ -888,6 +888,38 @@ void cu_sb_base64(CuBuilder *b, CuStr bytes);
 /** regions: writes *out alloc(a) */
 CU_MUST_USE int cu_base64_decode(CuArena *a, CuStr text, CuStr *out);
 
+/* ---- zlib streams -----------------------------------------------------
+ *
+ * RFC 1950 zlib streams of RFC 1951 deflate data, as git packs and loose
+ * objects hold them. The writer makes stored (uncompressed) blocks only,
+ * which every inflater must accept: the stream is the data plus 6 bytes,
+ * and 5 more for each 65535 bytes or part of that (one block at least, so
+ * an empty stream is 11 bytes). The inflater reads any stream zlib reads
+ * with its default window (stored, fixed and dynamic Huffman blocks, with
+ * zlib's rules for which incomplete codes it accepts), except one with a
+ * preset dictionary, which git never writes. Back-references may reach
+ * anywhere in the output up to 32 KiB back, whatever window size the
+ * header declares. */
+
+/* The Adler-32 of data continued from adler; start a sum with 1. An adler
+ * that no sum can be aborts. */
+/** regions: borrows */
+unsigned long cu_adler32(unsigned long adler, CuStr data);
+/** regions: allocates in b */
+void cu_sb_zlib(CuBuilder *b, CuStr data);
+/* Inflates the zlib stream at the start of in, which may have more bytes
+ * after it, as in a git pack. On success stores the data in *out,
+ * allocated in a, and the stream's length in *used, and returns 1. Returns
+ * 0 with *out empty and *used unchanged if the stream is invalid or cut
+ * short, its data would pass max_out bytes, or a runs out of memory (then
+ * a is marked failed). Time is linear in the input and output; memory is a
+ * few KiB of stack plus the output, which grows by doubling and may be
+ * copied as it grows, so a may hold up to about three times max_out,
+ * partial output included on failure: call it in a temp scope to bound and
+ * free that. */
+/** regions: writes *out alloc(a) */
+CU_MUST_USE int cu_zlib_inflate(CuArena *a, CuStr in, size_t max_out, CuStr *out, size_t *used);
+
 /* ---- Files: the platform module's first part ---------------------------
  *
  * Whole-file reads into an arena. The bytes are anything (NULs included)
