@@ -14,8 +14,10 @@ TESTS := $(patsubst tests/%.c,$(BUILD)/%,$(wildcard tests/test_*.c))
 .PHONY: check deep test curun test-curun test-wasi-strict cuhealth test-cuhealth
 check:
 	$(DCHECK) gate
+# DCHECK_JSON=FILE writes dcheck's JSON result there instead of its summary
+# (the nightly CI run reads it; ci/findings.py).
 deep:
-	$(PYTHON) -I tools/verify_deep.py --seconds "$(DEEP_SECONDS)" -- "$(DCHECK)" deep
+	$(PYTHON) -I tools/verify_deep.py --seconds "$(DEEP_SECONDS)" -- "$(DCHECK)" deep $(if $(DCHECK_JSON),--json >"$(DCHECK_JSON)")
 test: $(TESTS)
 	@for t in $(TESTS); do echo "$$t"; "$$t" || exit 1; done
 

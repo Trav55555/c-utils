@@ -321,6 +321,10 @@ keeps its existing 2,400-second limit through `DEEP_SECONDS=2400`. Cleanup can
 take additional time after the execution deadline. This is resource control
 for trusted checks, not a sandbox for hostile code.
 
+Run `make check` locally. Private CI runs `deep` nightly and records its
+findings; run `make deep` yourself only to confirm a fix to a nightly finding
+sooner.
+
 These are test configurations, not a promise that every platform or input has
 been proved.
 The string proofs cover inputs up to four bytes; the size-add proof covers

@@ -191,11 +191,12 @@ class WorkflowTests(unittest.TestCase):
         match = re.search(r"    if: >-\n((?:      .*\n)+)", text)
         self.assertIsNotNone(match)
         actual = " ".join(line.strip() for line in match.group(1).splitlines())
-        expected = ("github.event_name == 'push' && "
-                    "vars.CUTILS_CI_REPOSITORY != '' && "
-                    "vars.CUTILS_CI_ACTOR != '' && "
+        expected = ("vars.CUTILS_CI_REPOSITORY != '' && "
                     "github.repository == vars.CUTILS_CI_REPOSITORY && "
-                    "github.actor == vars.CUTILS_CI_ACTOR")
+                    "(github.event_name == 'schedule' || "
+                    "((github.event_name == 'push' || github.event_name == 'workflow_dispatch') && "
+                    "vars.CUTILS_CI_ACTOR != '' && "
+                    "github.actor == vars.CUTILS_CI_ACTOR))")
         self.assertEqual(actual, expected)
         self.assertIn("runs-on: ${{ vars.CUTILS_CI_RUNNER }}", text)
         for key in SETTINGS:
@@ -203,10 +204,24 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("persist-credentials: false", text)
         self.assertNotIn("pull_request", text)
 
+    def test_push_runs_gate_and_nightly_runs_deep(self):
+        text = (ROOT / ".gitea/workflows/ci.yml").read_text()
+        self.assertIn("cron: '0 6 * * *'", text)
+        self.assertIn("workflow_dispatch:", text)
+        self.assertIn("group: c-utils-${{ github.event_name }}-${{ github.ref }}", text)
+        self.assertIn("if: github.event_name == 'push'\n        run: bash ci/verify.sh gate\n", text)
+        self.assertIn("if: github.event_name != 'push'\n        run: bash ci/verify.sh deep\n", text)
+
+    def test_findings_issue_uses_only_private_login_and_trusted_repository(self):
+        text = (ROOT / "ci/verify.sh").read_text()
+        self.assertIn('--login "$CUTILS_CI_API_LOGIN" --repo "$GITHUB_REPOSITORY"', text)
+        self.assertIn("--require regions", text)
+        self.assertIn('DCHECK_JSON="$work/result.json"', text)
+
     def test_offline_checks_are_wired_into_both_pipelines(self):
         for path in [ROOT / ".github/workflows/test.yml", ROOT / "ci/verify.sh"]:
             self.assertIn("-m unittest discover", path.read_text())
-            self.assertIn("test_ci.py", path.read_text())
+            self.assertIn("-p 'test_ci*.py'", path.read_text())
 
 
 if __name__ == "__main__":
