@@ -48,6 +48,11 @@ description with the current findings and comments; a passing run comments
 and closes it. A finding is a failed check with its diagnostics and the last
 60 lines of its log. Work from these findings rather than running `make deep`
 locally. A failed issue update is logged and does not change the verdict.
+Only a call Gitea did not answer is retried, for up to 20 minutes in all; a
+create whose answer was lost is looked up before it is sent again. A run that
+stops before `make deep` starts (a pin mismatch, a toolchain that does not
+build) still opens the findings issue. The lock is held until the issue is
+kept, so two runs cannot both open one.
 
 Both tiers retain the checker profile validation, regions build, 3 GiB memory
 limit, and disabled swap, and keep their logs, plus `result.json` for the

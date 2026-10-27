@@ -22,11 +22,27 @@ command -v flock >/dev/null
 command -v systemd-run >/dev/null
 command -v tea >/dev/null
 systemctl --user show-environment >/dev/null
-# One checker run at a time, even if this repository gains another runner.
+# One checker run at a time on this host, the findings issue included.
 exec 9>"$XDG_RUNTIME_DIR/c-utils-ci.lock"
 flock 9
 work="$(mktemp -d "$RUNNER_TEMP/c-utils-ci.XXXXXX")"
 printf 'CI scratch: %s\n' "$work"
+# The deep run's verdict and findings issue, from exit status $1. The verdict
+# needs regions among the passes, so regions cannot pass by being skipped.
+# Gitea gets 20 minutes, inside the job's timeout-minutes.
+findings() {
+    python3 -I "$root/ci/findings.py" --result "$work/result.json" --root "$work/c-utils" \
+        --require regions --log "$root/ci-artifacts/deep.log" --exit-status "$1" --rev "$(git -C "$root" rev-parse HEAD)" \
+        --run-url "${GITHUB_SERVER_URL:-}/$GITHUB_REPOSITORY/actions/runs/${GITHUB_RUN_ID:-}" \
+        --login "$CUTILS_CI_API_LOGIN" --repo "$GITHUB_REPOSITORY" --within 1200
+}
+# A deep run that stops before make deep still keeps the findings issue.
+setup_failed() {
+    local rc=$?
+    findings "$rc" || true
+    exit "$rc"
+}
+if [[ "$tier" == deep ]]; then trap setup_failed EXIT; fi
 cp -a "$root" "$work/c-utils"
 python3 -I "$root/ci/fetch_dependencies.py" "$root/ci/dependencies.json" "$work"
 toolchain="$work/dependable-c-agent-toolchain"
@@ -61,14 +77,10 @@ fi
     DCHECK_JSON="$work/result.json" 2>&1 | tee "$root/ci-artifacts/deep.log" || status=$?
 keep_logs
 cp "$work/result.json" "$root/ci-artifacts/" 2>/dev/null || true
-exec 9>&-
-# The verdict needs regions among the passes, so regions cannot pass by being
-# skipped. The exit status is the verdict; a failed issue update is only logged.
+trap - EXIT
+# The exit status is the verdict; a failed issue update is only logged.
 verdict=0
-python3 -I "$root/ci/findings.py" --result "$work/result.json" --root "$work/c-utils" \
-    --require regions --log "$root/ci-artifacts/deep.log" --exit-status "$status" --rev "$(git -C "$root" rev-parse HEAD)" \
-    --run-url "${GITHUB_SERVER_URL:-}/$GITHUB_REPOSITORY/actions/runs/${GITHUB_RUN_ID:-}" \
-    --login "$CUTILS_CI_API_LOGIN" --repo "$GITHUB_REPOSITORY" --attempts 5 || verdict=$?
+findings "$status" || verdict=$?
 if [[ "$status" -ne 0 || "$verdict" -ne 0 ]]; then
     printf 'CI deep: FAIL\n'
     exit 1

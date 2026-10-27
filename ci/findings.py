@@ -9,6 +9,12 @@ log. One open issue titled TITLE holds the current findings: a failing run
 opens it or replaces its body and comments, and a passing run comments and
 closes it. The exit status is the verdict alone; a Gitea call that fails
 after its retries is reported and does not change it.
+
+A call is retried only while Gitea gives no answer of its own (no JSON, as
+when it is down or restarting), and only within --within seconds for all the
+calls together. An error from Gitea itself ends the attempt. A create that
+may have reached Gitea before its answer was lost is looked up before it is
+sent again, so a retry cannot open a second issue or post a comment twice.
 """
 import argparse
 import json
@@ -21,7 +27,10 @@ import time
 TITLE = "Nightly findings"
 MAX_DIAGNOSTICS = 40
 LOG_LINES = 60
+LOG_CHARS = 8000
 MAX_BODY = 60000
+TRUNCATED = "\n(truncated; the run's artifact has the full logs)\n"
+PAGE = 50
 
 
 def load_result(path):
@@ -58,7 +67,8 @@ def tail(path, lines):
         text = Path(path).read_text(errors="replace")
     except OSError:
         return "(log missing: %s)" % path
-    return "\n".join(text.splitlines()[-lines:])
+    text = "\n".join(text.splitlines()[-lines:])
+    return text if len(text) <= LOG_CHARS else "..." + text[-LOG_CHARS:]
 
 
 def fence(text):
@@ -99,21 +109,33 @@ def report(result, reasons, root, rev, run_url, log):
                       fence(tail(Path(root) / check["log"], LOG_LINES))]
     if not failed and log:
         parts += ["", "Last %d lines of the run's log:" % LOG_LINES, "", fence(tail(log, LOG_LINES))]
-    body = "\n".join(parts) + "\n"
-    if len(body) > MAX_BODY:
-        body = body[:MAX_BODY] + "\n\n(truncated; the run's artifact has the full logs)\n"
+    # Whole parts only, so a cut never leaves a code block open.
+    body = ""
+    for part in parts:
+        if len(body) + len(part) + 1 > MAX_BODY - len(TRUNCATED):
+            return body + TRUNCATED
+        body += part + "\n"
     return body
 
 
 class Gitea:
     """The issue calls, through the runner's tea login."""
 
-    def __init__(self, login, repo, attempts=1, pause=120):
+    def __init__(self, login, repo, attempts=1, pause=120, within=None, timeout=60):
         self.login, self.repo, self.attempts, self.pause = login, repo, attempts, pause
+        self.timeout = timeout
+        self.deadline = None if within is None else time.monotonic() + within
 
-    def call(self, method, path, body=None, expect="id"):
+    def call(self, method, path, body=None, expect="id", applied=None):
+        """The response to METHOD PATH. Before a retry, APPLIED (when given)
+        looks for what an earlier attempt may have created, and its result
+        is returned instead of sending the request again."""
         command = ["tea", "api", "--login", self.login, "-X", method, "/repos/%s%s" % (self.repo, path)]
         for attempt in range(1, self.attempts + 1):
+            if attempt > 1 and applied is not None:
+                found = applied()
+                if found is not None:
+                    return found
             with tempfile.NamedTemporaryFile("w", suffix=".json") as data:
                 if body is not None:
                     json.dump(body, data)
@@ -122,20 +144,38 @@ class Gitea:
                 else:
                     command_now = command
                 try:
-                    out = subprocess.run(command_now, capture_output=True, text=True, timeout=60).stdout
+                    out = subprocess.run(command_now, capture_output=True, text=True,
+                                         timeout=self.timeout).stdout
                     response = json.loads(out)
                 except (OSError, ValueError, subprocess.SubprocessError):
                     response = None
             # tea exits 0 on an HTTP error, so the response's shape is the check.
             if isinstance(response, list) or (isinstance(response, dict) and expect in response):
                 return response
-            if attempt < self.attempts:
-                time.sleep(self.pause)
+            if isinstance(response, dict) and "message" in response:
+                raise RuntimeError("%s %s: %s" % (method, path, response["message"]))
+            if attempt == self.attempts or not self.time_for_another():
+                break
+            time.sleep(self.pause)
         raise RuntimeError("%s %s failed" % (method, path))
 
+    def time_for_another(self):
+        return self.deadline is None or time.monotonic() + self.pause + self.timeout <= self.deadline
+
     def open_issue(self):
-        issues = self.call("GET", "/issues?state=open&type=issues&limit=50")
-        return next((i for i in issues if i.get("title") == TITLE), None)
+        page = 1
+        while True:
+            issues = self.call("GET", "/issues?state=open&type=issues&limit=%d&page=%d" % (PAGE, page))
+            found = next((i for i in issues if i.get("title") == TITLE), None)
+            if found is not None or len(issues) < PAGE:
+                return found
+            page += 1
+
+    def comment(self, number, body):
+        def posted():
+            comments = self.call("GET", "/issues/%d/comments?limit=%d" % (number, PAGE))
+            return next((c for c in reversed(comments) if c.get("body") == body), None)
+        return self.call("POST", "/issues/%d/comments" % number, {"body": body}, applied=posted)
 
 
 def publish(gitea, passed, body, rev, run_url):
@@ -145,17 +185,17 @@ def publish(gitea, passed, body, rev, run_url):
         if issue is None:
             return "no open findings"
         number = issue["number"]
-        gitea.call("POST", "/issues/%d/comments" % number,
-                   {"body": "Clean on `%s` ([run](%s)); closing." % (rev, run_url)})
+        gitea.comment(number, "Clean on `%s` ([run](%s)); closing." % (rev, run_url))
         gitea.call("PATCH", "/issues/%d" % number, {"state": "closed"}, expect="number")
         return "closed #%d" % number
     if issue is None:
-        created = gitea.call("POST", "/issues", {"title": TITLE, "body": body}, expect="number")
+        created = gitea.call("POST", "/issues", {"title": TITLE, "body": body}, expect="number",
+                             applied=gitea.open_issue)
         return "opened #%d" % created["number"]
     number = issue["number"]
     gitea.call("PATCH", "/issues/%d" % number, {"body": body}, expect="number")
-    gitea.call("POST", "/issues/%d/comments" % number,
-               {"body": "Still failing on `%s` ([run](%s)); the description has the current findings." % (rev, run_url)})
+    gitea.comment(number, "Still failing on `%s` ([run](%s)); the description has the current findings."
+                  % (rev, run_url))
     return "updated #%d" % number
 
 
@@ -170,7 +210,8 @@ def main(argv=None):
     parser.add_argument("--run-url", required=True)
     parser.add_argument("--login", help="tea login; without it the issue is left alone")
     parser.add_argument("--repo", help="owner/name")
-    parser.add_argument("--attempts", type=int, default=1)
+    parser.add_argument("--attempts", type=int, help="tries per call (default 1, or unlimited with --within)")
+    parser.add_argument("--within", type=float, help="seconds all the issue calls may take together")
     args = parser.parse_args(argv)
     result = load_result(args.result)
     passed, reasons = judge(result, args.require, args.exit_status)
@@ -183,8 +224,9 @@ def main(argv=None):
         print(body, end="")
     print("findings: %s" % ("none" if passed else "; ".join(reasons)))
     if args.login and args.repo:
+        attempts = args.attempts or (sys.maxsize if args.within else 1)
         try:
-            print("findings issue: " + publish(Gitea(args.login, args.repo, args.attempts),
+            print("findings issue: " + publish(Gitea(args.login, args.repo, attempts, within=args.within),
                                                passed, body, args.rev, args.run_url))
         except RuntimeError as error:
             print("findings issue not updated: %s" % error, file=sys.stderr)

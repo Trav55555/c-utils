@@ -38,7 +38,7 @@ class Recorder(FINDINGS.Gitea):
         super().__init__("login", "owner/repo")
         self.open_issues, self.fail, self.calls = list(open_issues), fail, []
 
-    def call(self, method, path, body=None, expect="id"):
+    def call(self, method, path, body=None, expect="id", applied=None):
         if self.fail:
             raise RuntimeError("%s %s failed" % (method, path))
         self.calls.append((method, path.split("?")[0], body))
@@ -93,7 +93,7 @@ class ReportTests(unittest.TestCase):
     def test_body_is_truncated(self):
         huge = dict(SEMANTICS_FAIL, log=None, diagnostics=[{"text": "x" * 2000}] * 40)
         body = FINDINGS.report(result("fail", [huge]), [], "/", "abc", "u", None)
-        self.assertLess(len(body), FINDINGS.MAX_BODY + 200)
+        self.assertLess(len(body), FINDINGS.MAX_BODY + 1)
         self.assertTrue(body.endswith("full logs)\n"))
 
 
@@ -128,7 +128,7 @@ class TeaTests(unittest.TestCase):
     def test_error_body_is_retried_then_raised(self):
         # tea exits 0 on an HTTP error, so the response's shape is the check.
         gitea = FINDINGS.Gitea("login", "owner/repo", attempts=2, pause=0)
-        error = subprocess.CompletedProcess([], 0, stdout='{"message":"not found"}', stderr="")
+        error = subprocess.CompletedProcess([], 0, stdout='<html>bad gateway</html>', stderr="")
         with mock.patch.object(FINDINGS.subprocess, "run", return_value=error) as run:
             with self.assertRaises(RuntimeError):
                 gitea.call("POST", "/issues", {"title": "t"}, expect="number")
@@ -141,6 +141,84 @@ class TeaTests(unittest.TestCase):
         ok = subprocess.CompletedProcess([], 0, stdout='{"id":3,"number":2}', stderr="")
         with mock.patch.object(FINDINGS.subprocess, "run", return_value=ok):
             self.assertEqual(gitea.call("POST", "/issues", {"title": "t"}, expect="number")["number"], 2)
+
+
+class Tea:
+    """Stands in for subprocess.run: answers tea calls from a script of
+    (method, path prefix) -> stdout or exception, and records them."""
+
+    def __init__(self, script):
+        self.script, self.calls = script, []
+
+    def __call__(self, command, **kwargs):
+        method, path = command[5], command[6]
+        self.calls.append((method, path))
+        for (m, prefix), answers in self.script.items():
+            if m == method and path.startswith(prefix):
+                answer = answers.pop(0) if len(answers) > 1 else answers[0]
+                if isinstance(answer, Exception):
+                    raise answer
+                return subprocess.CompletedProcess(command, 0, stdout=answer, stderr="")
+        raise AssertionError("unexpected call %s %s" % (method, path))
+
+
+class RetryTests(unittest.TestCase):
+    """A retry never repeats a create Gitea may already have applied; Gitea's
+    own error is final; the retries stop at the deadline; every page of open
+    issues is read."""
+    ISSUE = json.dumps([{"number": 4, "title": FINDINGS.TITLE}])
+    TIMEOUT = subprocess.TimeoutExpired(["tea"], 60)
+
+    def test_lost_create_is_looked_up_not_repeated(self):
+        tea = Tea({("GET", "/repos/o/r/issues"): ["[]", self.ISSUE], ("POST", "/repos/o/r/issues"): [self.TIMEOUT]})
+        with mock.patch.object(FINDINGS.subprocess, "run", tea), mock.patch.object(FINDINGS.time, "sleep"):
+            self.assertEqual(FINDINGS.publish(FINDINGS.Gitea("l", "o/r", attempts=5), False, "b", "abc", "u"), "opened #4")
+        self.assertEqual([c[0] for c in tea.calls], ["GET", "POST", "GET"])
+
+    def test_lost_comment_is_looked_up_not_repeated(self):
+        posted = json.dumps([{"id": 7, "body": "Clean on `abc` ([run](u)); closing."}])
+        tea = Tea({("GET", "/repos/o/r/issues/4/comments"): [posted], ("GET", "/repos/o/r/issues"): [self.ISSUE],
+                   ("POST", "/repos/o/r/issues/4/comments"): [self.TIMEOUT],
+                   ("PATCH", "/repos/o/r/issues/4"): ['{"number": 4}']})
+        with mock.patch.object(FINDINGS.subprocess, "run", tea), mock.patch.object(FINDINGS.time, "sleep"):
+            self.assertEqual(FINDINGS.publish(FINDINGS.Gitea("l", "o/r", attempts=5), True, "b", "abc", "u"), "closed #4")
+        self.assertEqual([c[0] for c in tea.calls].count("POST"), 1)
+
+    def test_gitea_error_is_not_retried(self):
+        tea = Tea({("POST", "/repos/o/r/issues"): ['{"message": "body too large", "url": "x"}']})
+        with mock.patch.object(FINDINGS.subprocess, "run", tea), mock.patch.object(FINDINGS.time, "sleep"):
+            with self.assertRaisesRegex(RuntimeError, "body too large"):
+                FINDINGS.Gitea("l", "o/r", attempts=5).call("POST", "/issues", {}, expect="number")
+        self.assertEqual(len(tea.calls), 1)
+
+    def test_no_answer_is_retried_until_the_deadline(self):
+        tea = Tea({("GET", "/repos/o/r/issues"): ["<html>502</html>"]})
+        clock = iter(range(0, 10000, 100))
+        with mock.patch.object(FINDINGS.subprocess, "run", tea), mock.patch.object(FINDINGS.time, "sleep"), \
+                mock.patch.object(FINDINGS.time, "monotonic", lambda: next(clock)):
+            gitea = FINDINGS.Gitea("l", "o/r", attempts=50, pause=120, within=1000, timeout=60)
+            with self.assertRaises(RuntimeError):
+                gitea.open_issue()
+        self.assertTrue(1 < len(tea.calls) < 50, len(tea.calls))
+
+    def test_every_page_of_open_issues_is_read(self):
+        full = json.dumps([{"number": n, "title": "other"} for n in range(100, 100 + FINDINGS.PAGE)])
+        tea = Tea({("GET", "/repos/o/r/issues"): [full, self.ISSUE]})
+        with mock.patch.object(FINDINGS.subprocess, "run", tea):
+            self.assertEqual(FINDINGS.Gitea("l", "o/r").open_issue()["number"], 4)
+        self.assertTrue(tea.calls[1][1].endswith("page=2"))
+
+    def test_cut_never_leaves_a_quoted_log_open(self):
+        with tempfile.TemporaryDirectory() as directory:
+            checks = []
+            for i in range(12):
+                log = Path(directory) / ("%d.log" % i)
+                log.write_text("".join("%d %s\n" % (n, "y" * 500) for n in range(60)))
+                checks.append({"name": "c%d" % i, "status": "fail", "log": log.name})
+            body = FINDINGS.report(result("fail", checks), [], directory, "abc", "u", None)
+        self.assertLessEqual(len(body), FINDINGS.MAX_BODY)
+        self.assertTrue(body.endswith("full logs)\n"))
+        self.assertEqual(body.count("```\n") % 2, 0)
 
 
 class MainTests(unittest.TestCase):
@@ -173,7 +251,7 @@ class MainTests(unittest.TestCase):
 
     def test_issue_failure_does_not_change_verdict(self):
         self.path.write_text(json.dumps(result("pass", [REGIONS])))
-        with mock.patch.object(FINDINGS, "Gitea", lambda *a: Recorder(fail=True)):
+        with mock.patch.object(FINDINGS, "Gitea", lambda *a, **k: Recorder(fail=True)):
             self.assertEqual(self.main(self.base + ["--login", "l", "--repo", "o/r"]), 0)
 
     def test_no_login_leaves_issue_alone(self):

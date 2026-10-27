@@ -218,6 +218,15 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("--require regions", text)
         self.assertIn('DCHECK_JSON="$work/result.json"', text)
 
+    def test_deep_setup_failure_keeps_the_findings_issue(self):
+        text = (ROOT / "ci/verify.sh").read_text()
+        armed = text.index("trap setup_failed EXIT")
+        self.assertLess(armed, text.index("fetch_dependencies.py"))
+        self.assertLess(armed, text.index("make -C \"$toolchain\" regions/regions"))
+        self.assertLess(text.index("deep DEEP_SECONDS"), text.index("trap - EXIT"))
+        # The lock is held until the findings issue is kept.
+        self.assertNotIn("exec 9>&-", text)
+
     def test_offline_checks_are_wired_into_both_pipelines(self):
         for path in [ROOT / ".github/workflows/test.yml", ROOT / "ci/verify.sh"]:
             self.assertIn("-m unittest discover", path.read_text())
