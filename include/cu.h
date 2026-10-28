@@ -920,6 +920,18 @@ void cu_sb_zlib(CuBuilder *b, CuStr data);
 /** regions: writes *out alloc(a) */
 CU_MUST_USE int cu_zlib_inflate(CuArena *a, CuStr in, size_t max_out, CuStr *out, size_t *used);
 
+/* The CRC-32 that gzip and zip use (reflected, polynomial 0x04C11DB7) of
+ * data continued from crc; start a sum with 0. A crc over 32 bits aborts. */
+/** regions: borrows */
+unsigned long cu_crc32(unsigned long crc, CuStr data);
+/* As cu_zlib_inflate, for the RFC 1952 gzip member at the start of in, as
+ * git sends a large request body: its optional extra field, name and
+ * comment are skipped and its header CRC, data CRC-32 and length are
+ * checked. A member with reserved flags set or a method other than
+ * deflate is invalid; *used ends at the member, before any next one. */
+/** regions: writes *out alloc(a) */
+CU_MUST_USE int cu_gzip_inflate(CuArena *a, CuStr in, size_t max_out, CuStr *out, size_t *used);
+
 /* ---- Files: the platform module's first part ---------------------------
  *
  * Whole-file reads into an arena. The bytes are anything (NULs included)
