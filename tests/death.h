@@ -1,6 +1,8 @@
 /* Death tests: expect_abort runs body in a child process and requires it to
- * die with SIGABRT. Where there is no fork (WASI), CU_DEATH_TESTS stays
- * undefined and test files skip their death tests. Include this first, so
+ * die with SIGABRT. A body that does not is named, with how it ended, before
+ * the assertion fails: the assertion alone does not say which death test it
+ * was. Where there is no fork (WASI), CU_DEATH_TESTS stays undefined and
+ * test files skip their death tests. Include this first, so
  * the feature-test macro precedes every system header. */
 #ifndef CU_TESTS_DEATH_H
 #define CU_TESTS_DEATH_H
@@ -11,6 +13,7 @@
 #endif
 #include <assert.h>
 #include <signal.h>
+#include <stdio.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #if defined(__linux__)
@@ -19,7 +22,9 @@
 
 #define CU_DEATH_TESTS 1
 
-static void expect_abort(void (*body)(void))
+#define expect_abort(body) expect_abort_named((body), #body)
+
+static void expect_abort_named(void (*body)(void), const char *name)
 {
     pid_t pid;
     int status;
@@ -36,6 +41,10 @@ static void expect_abort(void (*body)(void))
         _exit(0);
     }
     assert(waitpid(pid, &status, 0) == pid);
+    if (WIFEXITED(status))
+        fprintf(stderr, "expect_abort: %s exited with status %d\n", name, WEXITSTATUS(status));
+    else if (WIFSIGNALED(status) && WTERMSIG(status) != SIGABRT)
+        fprintf(stderr, "expect_abort: %s died of signal %d\n", name, WTERMSIG(status));
     assert(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
 }
 #endif
