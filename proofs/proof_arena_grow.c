@@ -2,12 +2,17 @@
  * block reallocates the block, and realloc may fail. On failure
  * cu_arena_grow returns NULL, marks the arena failed, and leaves held and
  * the old bytes as they were; on success the bytes move and held grows by
- * exactly the bytes added. The arena releases cleanly either way.
+ * exactly the bytes added. Releasing the arena returns held to 0 either
+ * way, so the block was never dropped from the arena.
  *
  * No test reaches the failure: cu_arena_fail_at and the limit refuse
  * before realloc runs, and a real failure needs a request too big for the
- * sanitizers to return NULL. The first and last bytes carry symbolic
- * values; a loop over all of them would pass dcheck's unwind bound. */
+ * sanitizers to return NULL. One byte, at a symbolic position below OLD,
+ * carries a symbolic value, so every position is checked without a loop
+ * over the bytes, which would pass dcheck's unwind bound. The allocators
+ * below call __CPROVER_allocate, which --memory-leak-check does not track,
+ * so held, not the leak check, shows that no block was lost. The fault
+ * controls (tools/fault_controls.py) show each assertion failing. */
 #include <stdlib.h>
 #include <string.h>
 #include "cu.h"
@@ -17,6 +22,7 @@
 
 int nondet_int(void);
 char nondet_char(void);
+size_t nondet_size(void);
 
 /* Pushes never fail here, so the only failure is the realloc's. */
 void *malloc(size_t n)
@@ -43,8 +49,8 @@ void *realloc(void *p, size_t n)
 int main(void)
 {
     CuArena a;
-    char first;
-    char last;
+    char byte;
+    size_t at;
     char *p;
     char *q;
     size_t held;
@@ -52,21 +58,22 @@ int main(void)
     cu_arena_init_with(&a, OLD, nondet_int() != 0);
     p = cu_arena_push_bytes(&a, OLD);
     __CPROVER_assert(p != NULL, "push succeeds");
-    first = nondet_char();
-    last = nondet_char();
-    p[0] = first;
-    p[OLD - 1] = last;
+    at = nondet_size();
+    __CPROVER_assume(at < OLD);
+    byte = nondet_char();
+    p[at] = byte;
     held = a.held;
     q = (char *)cu_arena_grow(&a, p, OLD, NEW);
     if (q == NULL) {
         __CPROVER_assert(cu_arena_failed(&a), "a failed grow marks the arena");
         __CPROVER_assert(a.held == held, "a failed grow holds nothing more");
-        __CPROVER_assert(p[0] == first && p[OLD - 1] == last, "a failed grow keeps the old bytes");
+        __CPROVER_assert(p[at] == byte, "a failed grow keeps the old bytes");
     } else {
         __CPROVER_assert(!cu_arena_failed(&a), "a grow that succeeds leaves the arena unmarked");
         __CPROVER_assert(a.held == held + (NEW - OLD), "held grows by the bytes added");
-        __CPROVER_assert(q[0] == first && q[OLD - 1] == last, "the bytes move with the grow");
+        __CPROVER_assert(q[at] == byte, "the bytes move with the grow");
     }
     cu_arena_release(&a);
+    __CPROVER_assert(a.held == 0, "release returns every held byte");
     return 0;
 }
