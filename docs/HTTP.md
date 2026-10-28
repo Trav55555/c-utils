@@ -123,8 +123,9 @@ decimal length that cannot fit size_t, and the Transfer-Encoding framing
 rejected above. `CU_HTTP_UNSUPPORTED` reports excluded protocol features,
 including a well-formed chunked Transfer-Encoding. A bad request outranks
 unsupported features and the body-size limit. `CU_HTTP_TRUNCATED` reports
-early EOF. A clean EOF before any head bytes returns END. Metadata is empty on a failed begin, although the
-caller's head buffer may have been partially written.
+early EOF. A clean EOF before any head bytes returns END. Metadata is empty
+on a failed begin, although the caller's head buffer may have been
+partially written.
 
 `CU_HTTP_IO` preserves the reader's first errno, including ETIMEDOUT and zero.
 Use the status to recognize failure; errno zero does not mean success. Errors
@@ -150,9 +151,9 @@ bodies, truncated input, first-error behavior, overlapping memory reads, and
 real TCP deadlines. `fuzz/fuzz_http.c` checks bounded parser/accounting
 invariants under arbitrary memory input, and compares every accepted or
 unsupported head against a separate model of the Transfer-Encoding rule.
-`proofs/proof_http_body.c` models
-0..4 body bytes and 1..2-byte buffers with a following sentinel frame. That
-proof does not cover head parsing, sockets, clocks, or all inputs.
+`proofs/proof_http_body.c` models 0..4 body bytes and 1..2-byte buffers
+with a following sentinel frame. That proof does not cover head parsing,
+sockets, clocks, or all inputs.
 
 Run `make check` and `make deep` to verify your checkout. The coordinated deep
 check for this framing slice passed. Verification covers the supported profile
