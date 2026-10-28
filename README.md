@@ -325,6 +325,13 @@ Run `make check` locally. Private CI runs `deep` nightly and records its
 findings; run `make deep` yourself only to confirm a fix to a nightly finding
 sooner.
 
+`make controls DCHECK=/path/to/dcheck` seeds known scope, handle and
+arena-growth faults into scratch copies. Each focused test, fuzz input or proof
+must catch its fault, and the unmodified sources must pass the same checks.
+[Fault controls](docs/FAULT-CONTROLS.md) records what each control shows,
+what the arena-growth proof assumes, and how a consumer qualifies a pinned
+revision.
+
 These are test configurations, not a promise that every platform or input has
 been proved.
 The string proofs cover inputs up to four bytes; the size-add proof covers
@@ -336,6 +343,7 @@ not proved for all 64-bit inputs.
 - [Public API and contracts](include/cu.h)
 - [Roadmap](ROADMAP.md)
 - [Performance review and measurements](docs/PERFORMANCE-REVIEW-20261014.md)
+- [Fault controls and arena-growth evidence](docs/FAULT-CONTROLS.md)
 - [Thread design](docs/THREADS.md)
 - [cgrep](https://github.com/Trav55555/cgrep), a consumer of the streaming input API
 - [MIT license](LICENSE)

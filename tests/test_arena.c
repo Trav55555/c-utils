@@ -476,7 +476,7 @@ static void test_grow_failure(int debug)
     held = a.held;
     cu_arena_set_limit(&a, held + 100);
     assert(cu_arena_grow(&a, p, 64, 200) == NULL);
-    assert(a.refused == 200 - 64 && a.held == held && has_pattern(p, 64));
+    assert(cu_arena_failed(&a) && a.refused == 200 - 64 && a.held == held && has_pattern(p, 64));
     cu_arena_set_limit(&a, a.held + a.refused);
     q = (char *)cu_arena_grow(&a, p, 64, 200);
     assert(q != NULL && has_pattern(q, 64) && a.held == a.limit);
