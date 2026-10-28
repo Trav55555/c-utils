@@ -35,8 +35,8 @@ CuHttpResult cu_http_begin(CuHttpRequest *r, CuReader *reader, char *head,
                            size_t cap, size_t max_fields, size_t max_body)
 {
     size_t used, n, end, p, m, t, target_end, start, colon, a, b;
-    size_t fields, length, digit;
-    int host, cl, unsupported, too_large;
+    size_t fields, length, digit, matched;
+    int host, cl, te, te_chunked, gap, unsupported, too_large;
     unsigned char c;
     CuInputStatus status;
     if (r == NULL || reader == NULL || head == NULL || cap == 0) abort();
@@ -82,7 +82,7 @@ CuHttpResult cu_http_begin(CuHttpRequest *r, CuReader *reader, char *head,
         return http_state(r, CU_HTTP_BAD_REQUEST);
     unsupported = m == 7 && memcmp(head, "CONNECT", 7) == 0;
     p = end + 2;
-    host = cl = too_large = 0;
+    host = cl = te = te_chunked = too_large = 0;
     fields = length = 0;
     while (p < used - 2) {
         if (fields == max_fields) return http_state(r, CU_HTTP_LIMIT);
@@ -117,14 +117,42 @@ CuHttpResult cu_http_begin(CuHttpRequest *r, CuReader *reader, char *head,
                 length = length * 10 + digit;
             }
             too_large = length > max_body;
-        } else if (http_name(head + start, colon - start, "transfer-encoding") ||
-                   http_name(head + start, colon - start, "expect") ||
+        } else if (http_name(head + start, colon - start, "transfer-encoding")) {
+            /* All Transfer-Encoding lines form one list (RFC 9110 5.3);
+             * te_chunked says whether its last coding so far is chunked.
+             * matched counts the bytes of "chunked" seen in this element,
+             * 8 marks a mismatch, and 0 means no element byte yet. */
+            te = 1;
+            matched = 0;
+            gap = 0;
+            for (; a <= b; a++) {
+                if (a == b || head[a] == ',') {
+                    if (matched != 0) {
+                        if (te_chunked) return http_state(r, CU_HTTP_BAD_REQUEST);
+                        te_chunked = matched == 7;
+                    }
+                    matched = 0;
+                    gap = 0;
+                } else if (head[a] == ' ' || head[a] == '\t') {
+                    gap = matched != 0;
+                } else if (gap || matched >= 7 ||
+                           cu_ascii_to_lower(head[a]) != "chunked"[matched]) {
+                    matched = 8;
+                } else {
+                    matched++;
+                }
+            }
+        } else if (http_name(head + start, colon - start, "expect") ||
                    http_name(head + start, colon - start, "upgrade")) {
             unsupported = 1;
         }
     }
     if (!host) return http_state(r, CU_HTTP_BAD_REQUEST);
-    if (unsupported) return http_state(r, CU_HTTP_UNSUPPORTED);
+    /* RFC 9112 6.3: a final coding other than chunked is a 400, and so is
+     * Transfer-Encoding with Content-Length. Chunked bodies are not
+     * implemented, so a well-formed chunked request is unsupported. */
+    if (te && (cl || !te_chunked)) return http_state(r, CU_HTTP_BAD_REQUEST);
+    if (te || unsupported) return http_state(r, CU_HTTP_UNSUPPORTED);
     if (too_large) return http_state(r, CU_HTTP_LIMIT);
     r->method = cu_str_n(head, m);
     r->target = cu_str_n(head + t, target_end - t);

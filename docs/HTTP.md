@@ -103,18 +103,27 @@ The profile follows the basic syntax and body-length rules of
   surrounding spaces/tabs. Leading zeroes are accepted. Signs, comma lists,
   internal whitespace, unrepresentable values, and duplicates are rejected.
   Equal duplicate lengths are rejected too, rather than normalized.
-- Every Transfer-Encoding is unsupported, including chunked and identity.
-  A request containing both Transfer-Encoding and Content-Length is never
-  accepted. Expect, Upgrade, and the CONNECT method are unsupported too.
+- Chunked request bodies are not implemented. All Transfer-Encoding field
+  lines form one comma-separated list, in order; empty elements and
+  surrounding spaces/tabs are ignored, and `chunked` matches without regard
+  to case and only as a whole element without parameters. As
+  [RFC 9112 section 6.3](https://www.rfc-editor.org/rfc/rfc9112.html#section-6.3)
+  requires, a list with no coding or whose final coding is not `chunked`
+  is a bad request, and so is `chunked` before the final coding (section 6.1)
+  or Transfer-Encoding together with Content-Length. A list ending in
+  `chunked`, with or without codings before it, is unsupported.
+- Expect, Upgrade, and the CONNECT method are unsupported.
 - Field names must be tokens without whitespace before the colon. Bare LF,
   bare CR, folded fields, NUL, DEL, and other control bytes are rejected.
   Tabs are allowed in field values, not as request-line separators.
 
 `CU_HTTP_LIMIT` reports configured head, field-count, or representable body-size
 limits. `CU_HTTP_BAD_REQUEST` reports malformed supported syntax, including a
-decimal length that cannot fit size_t. `CU_HTTP_UNSUPPORTED` reports excluded
-protocol features. `CU_HTTP_TRUNCATED` reports early EOF. A clean EOF before
-any head bytes returns END. Metadata is empty on a failed begin, although the
+decimal length that cannot fit size_t, and the Transfer-Encoding framing
+rejected above. `CU_HTTP_UNSUPPORTED` reports excluded protocol features,
+including a well-formed chunked Transfer-Encoding. A bad request outranks
+unsupported features and the body-size limit. `CU_HTTP_TRUNCATED` reports
+early EOF. A clean EOF before any head bytes returns END. Metadata is empty on a failed begin, although the
 caller's head buffer may have been partially written.
 
 `CU_HTTP_IO` preserves the reader's first errno, including ETIMEDOUT and zero.
@@ -139,7 +148,9 @@ not a throughput-tested server parser.
 Tracked tests exercise strict syntax, size boundaries, binary and pipelined
 bodies, truncated input, first-error behavior, overlapping memory reads, and
 real TCP deadlines. `fuzz/fuzz_http.c` checks bounded parser/accounting
-invariants under arbitrary memory input. `proofs/proof_http_body.c` models
+invariants under arbitrary memory input, and compares every accepted or
+unsupported head against a separate model of the Transfer-Encoding rule.
+`proofs/proof_http_body.c` models
 0..4 body bytes and 1..2-byte buffers with a following sentinel frame. That
 proof does not cover head parsing, sockets, clocks, or all inputs.
 

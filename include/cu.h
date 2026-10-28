@@ -1501,8 +1501,11 @@ int cu_reader_errno(const CuReader *r);
  * Strict HTTP/1.1 origin-form requests with one nonempty Host and optional
  * single decimal Content-Length. No Content-Length means an empty body.
  * Rejects duplicate Content-Length, comma lists, bare LF, obs-fold,
- * whitespace before colons, non-ASCII/control bytes in the head, and
- * Transfer-Encoding. Expect, Upgrade and CONNECT are unsupported too.
+ * whitespace before colons and non-ASCII/control bytes in the head.
+ * Transfer-Encoding lines form one list (RFC 9112 6.3): a list that is
+ * empty, ends in a coding other than chunked, or names chunked earlier is
+ * a bad request, and so is Transfer-Encoding with Content-Length. A final
+ * chunked is unsupported, as are Expect, Upgrade and CONNECT.
  * This slice is NOT a complete/conforming HTTP/1.1 server: chunked input,
  * URI/Host authority validation and routing are absent. Response heads have
  * a separate restricted serializer below; delivery/body policy remains external.
