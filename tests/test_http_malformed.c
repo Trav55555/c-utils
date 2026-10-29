@@ -3,6 +3,7 @@
  * 300 s per-file limit on a loaded host, these cases 106 s alone. The
  * rest of test_http.c, renamed out of the way, supplies the wire oracles
  * and probe(). */
+int test_http_main(void);
 #define main test_http_main
 #include "test_http.c"
 #undef main

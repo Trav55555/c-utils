@@ -3,6 +3,7 @@
  * of dcheck's 300 s per-file limit on a loaded host. The rest of
  * test_json.c, renamed out of the way, supplies the loop sizes and
  * helpers. */
+int test_json_main(void);
 #define main test_json_main
 #include "test_json.c"
 #undef main
