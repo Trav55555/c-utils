@@ -1456,6 +1456,11 @@ CU_MUST_USE int cu_socket_read_for(CuSocket *s, char *buf, size_t cap, size_t *g
                                  unsigned long timeout_ms);
 /** regions: borrows */
 CU_MUST_USE int cu_socket_write(CuSocket *s, CuStr bytes);
+/* Ends s's writing side: the peer reads what was written, then the end of
+ * the stream, while s can still read. Later writes fail with EPIPE.
+ * A listener aborts. */
+/** regions: borrows */
+CU_MUST_USE int cu_socket_shutdown_write(CuSocket *s);
 /* Closes s. Idempotent, as cu_append_close. Failed sockets replay their
  * saved error in errno, including on repeated closes and when it is zero. */
 /** regions: borrows */

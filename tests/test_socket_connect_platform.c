@@ -29,6 +29,7 @@ int main(void) { return 0; }
 #define cu_socket_read boundary_read
 #define cu_socket_read_for boundary_read_for
 #define cu_socket_write boundary_write
+#define cu_socket_shutdown_write boundary_shutdown_write
 #define cu_socket_close boundary_close
 #define cu_poller_init boundary_poller_init
 #define cu_poller_add boundary_poller_add
