@@ -55,6 +55,8 @@ mkdir -p "$root/ci-artifacts"
 keep_logs() {
     if [[ -d "$work/c-utils/.dcheck/logs" ]]; then
         cp -a "$work/c-utils/.dcheck/logs" "$root/ci-artifacts/logs"
+        # Where the time went, in the job log, which outlives the artifacts.
+        python3 -I "$root/ci/timings.py" "$work/c-utils/.dcheck/logs"
     fi
 }
 
