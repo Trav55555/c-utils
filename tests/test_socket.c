@@ -21,6 +21,8 @@ int main(void)
     assert(!cu_socket_close(&s));
     assert(!cu_socket_connect(&s, "127.0.0.1", 1));
     assert(cu_socket_errno(&s) == ENOSYS);
+    errno = 0;
+    assert(!cu_socket_shutdown_write(&s) && errno == ENOSYS);
     assert(!cu_socket_close(&s));
     cu_arena_init(&a);
     errno = 0;
@@ -124,6 +126,31 @@ static void test_round_trip(void)
     assert(cu_socket_close(&p.client));
     assert(cu_socket_read(&p.server, buf, sizeof buf, &got) && got == 0);
     assert(cu_socket_close(&p.server));
+    assert(cu_socket_close(&p.listener));
+}
+
+/* After a half-close the peer reads the bytes, then the end, and can still
+ * send; writing again fails with EPIPE, which close reports. */
+static void test_half_close(void)
+{
+    Pair p;
+    char buf[16];
+    size_t got;
+
+    pair_open(&p);
+    assert(cu_socket_write(&p.server, cu_str_cstr("answer")));
+    assert(cu_socket_shutdown_write(&p.server));
+    read_exactly(&p.client, buf, 6);
+    assert(memcmp(buf, "answer", 6) == 0);
+    assert(cu_socket_read(&p.client, buf, sizeof buf, &got) && got == 0);
+    assert(cu_socket_write(&p.client, cu_str_cstr("more")));
+    read_exactly(&p.server, buf, 4);
+    assert(memcmp(buf, "more", 4) == 0);
+    assert(!cu_socket_write(&p.server, cu_str_cstr("late")));
+    assert(cu_socket_errno(&p.server) == EPIPE);
+    errno = 0;
+    assert(!cu_socket_close(&p.server) && errno == EPIPE);
+    assert(cu_socket_close(&p.client));
     assert(cu_socket_close(&p.listener));
 }
 
@@ -612,6 +639,16 @@ static void read_listener(void)
     (void)ok;
 }
 
+static void shutdown_listener(void)
+{
+    Pair p;
+    int ok;
+
+    pair_open(&p);
+    ok = cu_socket_shutdown_write(&p.listener);
+    (void)ok;
+}
+
 static void accept_alias(void)
 {
     Pair p;
@@ -695,6 +732,7 @@ static void death_tests(void)
     expect_abort(read_after_close);
     expect_abort(read_listener);
     expect_abort(accept_on_connection);
+    expect_abort(shutdown_listener);
     expect_abort(poller_after_destroy);
     expect_abort(poller_zero_capacity);
 }
@@ -703,6 +741,7 @@ static void death_tests(void)
 int main(void)
 {
     test_round_trip();
+    test_half_close();
     test_large_transfer();
     test_timeout();
     test_signal_timeout(0);

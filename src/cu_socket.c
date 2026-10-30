@@ -145,6 +145,11 @@ int cu_socket_write(CuSocket *s, CuStr bytes)
     return usable(s);
 }
 
+int cu_socket_shutdown_write(CuSocket *s)
+{
+    return usable(s);
+}
+
 int cu_socket_close(CuSocket *s)
 {
     if (s == NULL)
@@ -717,6 +722,17 @@ int cu_socket_write(CuSocket *s, CuStr bytes)
         p += r;
         left -= (size_t)r;
     }
+    return 1;
+}
+
+int cu_socket_shutdown_write(CuSocket *s)
+{
+    if (!usable(s))
+        return 0;
+    if (s->listen)
+        abort();
+    if (shutdown(s->fd, SHUT_WR) != 0)
+        return fail(s);
     return 1;
 }
 
