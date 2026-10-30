@@ -15,6 +15,9 @@ header-only library**.
 [API guide](#api-guide) · [Ownership and errors](#ownership-and-errors) ·
 [Tests and platforms](#tests-and-platforms)
 
+[Project north star](NORTH_STAR.md) records the direction and decision filters.
+The [roadmap](ROADMAP.md) records the work order.
+
 ## Quick start
 
 Clone the repository:
