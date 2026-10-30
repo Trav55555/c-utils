@@ -658,6 +658,7 @@ int cu_socket_read_for(CuSocket *s, char *buf, size_t cap, size_t *got,
 {
     ssize_t r;
     struct timespec start;
+    struct timespec t;
 
     if (buf == NULL || cap == 0 || got == NULL)
         abort();
@@ -667,6 +668,23 @@ int cu_socket_read_for(CuSocket *s, char *buf, size_t cap, size_t *got,
         abort();
     if (!io_start(timeout_ms, &start))
         return fail(s);
+    /* One optimistic receive, without changing the descriptor's flags.
+     * Cold/interrupted calls retain the original poll-first retry path. */
+    if (timeout_ms) {
+        if (clock_gettime(CLOCK_MONOTONIC, &t) != 0)
+            return fail(s);
+        if (remaining_ms(start, t, timeout_ms) == 0) {
+            errno = ETIMEDOUT;
+            return fail(s);
+        }
+        r = recv(s->fd, buf, cap < MAX_CHUNK ? cap : MAX_CHUNK, MSG_DONTWAIT);
+        if (r >= 0) {
+            *got = (size_t)r;
+            return 1;
+        }
+        if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK)
+            return fail_io(s);
+    }
     for (;;) {
         if (!io_wait(s, timeout_ms, start, POLLIN))
             return fail(s);
