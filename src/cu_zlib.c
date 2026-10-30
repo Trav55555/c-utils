@@ -379,51 +379,66 @@ static int dynamic(Bits *s, Out *o)
     return codes(s, o, &lit, &dist);
 }
 
-int cu_zlib_inflate(CuArena *a, CuStr in, size_t max_out, CuStr *out, size_t *used)
+/* Inflates deflate blocks from s, through the final one, into o, which
+ * starts empty with room for at most max bytes, and leaves s at the next
+ * byte boundary. */
+static int blocks(Bits *s, Out *o, CuArena *a, size_t max)
 {
     unsigned long last;
     unsigned long type;
-    unsigned long sum;
-    Bits s;
-    Out o;
     Fixed f;
     int ok;
 
-    if (a == NULL || out == NULL || used == NULL || (in.ptr == NULL && in.len != 0))
-        abort();
-    *out = cu_str_empty();
-    s.p = (const unsigned char *)in.ptr;
-    s.len = in.len;
-    s.at = 2;
-    s.held = 0;
-    s.n = 0;
-    /* Deflate, a window of at most 32 KiB, the check bits, and no preset
-     * dictionary, which git never uses. */
-    if (in.len < 2 || (s.p[0] & 0x0F) != 8 || s.p[0] >> 4 > 7 ||
-        ((unsigned long)s.p[0] * 256 + s.p[1]) % 31 != 0 || (s.p[1] & 0x20) != 0)
-        return 0;
-    o.a = a;
-    o.p = NULL;
-    o.len = 0;
-    o.cap = 0;
-    o.max = max_out;
+    o->a = a;
+    o->p = NULL;
+    o->len = 0;
+    o->cap = 0;
+    o->max = max;
     f.built = 0;
     do {
-        if (!take(&s, 1, &last) || !take(&s, 2, &type))
+        if (!take(s, 1, &last) || !take(s, 2, &type))
             return 0;
         if (type == 0)
-            ok = stored(&s, &o);
+            ok = stored(s, o);
         else if (type == 1)
-            ok = fixed(&s, &o, &f);
+            ok = fixed(s, o, &f);
         else if (type == 2)
-            ok = dynamic(&s, &o);
+            ok = dynamic(s, o);
         else
             ok = 0;
         if (!ok)
             return 0;
     } while (!last);
-    to_byte(&s);
-    if (s.len - s.at < 4)
+    to_byte(s);
+    return 1;
+}
+
+/** regions: writes *s view(in) */
+static void bits_at(Bits *s, CuStr in, size_t at)
+{
+    s->p = (const unsigned char *)in.ptr;
+    s->len = in.len;
+    s->at = at;
+    s->held = 0;
+    s->n = 0;
+}
+
+int cu_zlib_inflate(CuArena *a, CuStr in, size_t max_out, CuStr *out, size_t *used)
+{
+    unsigned long sum;
+    Bits s;
+    Out o;
+
+    if (a == NULL || out == NULL || used == NULL || (in.ptr == NULL && in.len != 0))
+        abort();
+    *out = cu_str_empty();
+    bits_at(&s, in, 2);
+    /* Deflate, a window of at most 32 KiB, the check bits, and no preset
+     * dictionary, which git never uses. */
+    if (in.len < 2 || (s.p[0] & 0x0F) != 8 || s.p[0] >> 4 > 7 ||
+        ((unsigned long)s.p[0] * 256 + s.p[1]) % 31 != 0 || (s.p[1] & 0x20) != 0)
+        return 0;
+    if (!blocks(&s, &o, a, max_out) || s.len - s.at < 4)
         return 0;
     sum = (unsigned long)s.p[s.at] << 24 | (unsigned long)s.p[s.at + 1] << 16 |
           (unsigned long)s.p[s.at + 2] << 8 | (unsigned long)s.p[s.at + 3];
@@ -433,5 +448,96 @@ int cu_zlib_inflate(CuArena *a, CuStr in, size_t max_out, CuStr *out, size_t *us
         return 0;
     }
     *used = s.at + 4;
+    return 1;
+}
+
+/* CRC-32 four bits at a time: the remainders of the 16 nibbles. */
+static const unsigned long crc_nibble[16] = {
+    0x00000000UL, 0x1DB71064UL, 0x3B6E20C8UL, 0x26D930ACUL, 0x76DC4190UL, 0x6B6B51F4UL,
+    0x4DB26158UL, 0x5005713CUL, 0xEDB88320UL, 0xF00F9344UL, 0xD6D6A3E8UL, 0xCB61B38CUL,
+    0x9B64C2B0UL, 0x86D3D2D4UL, 0xA00AE278UL, 0xBDBDF21CUL};
+
+unsigned long cu_crc32(unsigned long crc, CuStr data)
+{
+    const unsigned char *p;
+    size_t i;
+
+    if ((data.ptr == NULL && data.len != 0) || crc > 0xFFFFFFFFUL)
+        abort();
+    p = (const unsigned char *)data.ptr;
+    crc ^= 0xFFFFFFFFUL;
+    for (i = 0; i < data.len; i++) {
+        crc ^= p[i];
+        crc = crc >> 4 ^ crc_nibble[crc & 15];
+        crc = crc >> 4 ^ crc_nibble[crc & 15];
+    }
+    return crc ^ 0xFFFFFFFFUL;
+}
+
+static unsigned long le32(const unsigned char *p)
+{
+    return (unsigned long)p[0] | (unsigned long)p[1] << 8 | (unsigned long)p[2] << 16 |
+           (unsigned long)p[3] << 24;
+}
+
+/* Moves *at past the NUL that ends a string field, or returns 0. */
+static int skip_string(CuStr in, size_t *at)
+{
+    while (*at < in.len && in.ptr[*at] != '\0')
+        ++*at;
+    if (*at == in.len)
+        return 0;
+    ++*at;
+    return 1;
+}
+
+int cu_gzip_inflate(CuArena *a, CuStr in, size_t max_out, CuStr *out, size_t *used)
+{
+    const unsigned char *p;
+    unsigned long flags;
+    size_t at;
+    size_t n;
+    Bits s;
+    Out o;
+
+    if (a == NULL || out == NULL || used == NULL || (in.ptr == NULL && in.len != 0))
+        abort();
+    *out = cu_str_empty();
+    p = (const unsigned char *)in.ptr;
+    /* The magic bytes, deflate, and no reserved flags; the time, extra
+     * flags and system byte that follow are not read. */
+    if (in.len < 10 || p[0] != 0x1F || p[1] != 0x8B || p[2] != 8 || (p[3] & 0xE0) != 0)
+        return 0;
+    flags = p[3];
+    at = 10;
+    if ((flags & 4) != 0) {
+        if (in.len - at < 2)
+            return 0;
+        n = (size_t)p[at] | (size_t)p[at + 1] << 8;
+        at += 2;
+        if (in.len - at < n)
+            return 0;
+        at += n;
+    }
+    if ((flags & 8) != 0 && !skip_string(in, &at))
+        return 0;
+    if ((flags & 16) != 0 && !skip_string(in, &at))
+        return 0;
+    if ((flags & 2) != 0) {
+        if (in.len - at < 2 ||
+            (cu_crc32(0, cu_str_prefix(in, at)) & 0xFFFF) != ((unsigned long)p[at] | (unsigned long)p[at + 1] << 8))
+            return 0;
+        at += 2;
+    }
+    bits_at(&s, in, at);
+    if (!blocks(&s, &o, a, max_out) || s.len - s.at < 8)
+        return 0;
+    *out = cu_str_n((const char *)o.p, o.len);
+    if (cu_crc32(0, *out) != le32(s.p + s.at) ||
+        ((unsigned long)o.len & 0xFFFFFFFFUL) != le32(s.p + s.at + 4)) {
+        *out = cu_str_empty();
+        return 0;
+    }
+    *used = s.at + 8;
     return 1;
 }

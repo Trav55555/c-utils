@@ -1,8 +1,10 @@
 /* libFuzzer harness: inflating any input either fails, or gives data that
  * the stream's own bytes alone inflate to again and that survives the
  * writer and inflating back. Writing the input and inflating it gives the
- * input. Agreement with zlib itself is pinned by the vectors in
- * tests/test_zlib.c; the seeds are streams zlib wrote. */
+ * input. Reading the input as a gzip member likewise fails, or gives data
+ * its own bytes give again. Agreement with zlib itself is pinned by the
+ * vectors in tests/test_zlib.c and tests/test_gzip.c; the seeds are
+ * streams zlib wrote. */
 #include <stddef.h>
 #include <stdint.h>
 #include "cu.h"
@@ -41,6 +43,13 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
             used_again != used || !cu_str_eq(again, out))
             __builtin_trap();
         round_trip(&a, out);
+    }
+    if (cu_gzip_inflate(&a, in, 1UL << 20, &out, &used)) {
+        if (used > size)
+            __builtin_trap();
+        if (!cu_gzip_inflate(&a, cu_str_prefix(in, used), out.len, &again, &used_again) ||
+            used_again != used || !cu_str_eq(again, out))
+            __builtin_trap();
     }
     round_trip(&a, in);
     cu_arena_release(&a);
