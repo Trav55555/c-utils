@@ -1,5 +1,6 @@
 """Finite loopback tests; subprocesses are test infrastructure, never service jobs."""
 import email.utils
+import errno
 import http.client
 import io
 import json
@@ -57,7 +58,13 @@ def exchange(port, request, pause=0):
         s.sendall(request)
         if pause:
             time.sleep(pause)
-        s.shutdown(socket.SHUT_WR)
+        try:
+            s.shutdown(socket.SHUT_WR)
+        except OSError as exc:
+            # Early rejection may close the peer before our half-close. Still
+            # collect the reply: callers must validate it, not assume success.
+            if exc.errno != errno.ENOTCONN:
+                raise
         data = b''
         while True:
             try:
@@ -86,6 +93,65 @@ def parse(wire, method='GET'):
     assert email.utils.parsedate_to_datetime(r.getheader('Date')).utcoffset().total_seconds() == 0
     assert wire.count(b'HTTP/1.1 ') == 1
     return r, body
+
+
+def test_exchange():
+    """Model early rejection deterministically, not a kernel timing guarantee."""
+    from unittest.mock import patch
+
+    good = (b'HTTP/1.1 400 Bad Request\r\nConnection: close\r\n'
+            b'Date: Thu, 01 Jan 1970 00:00:00 GMT\r\n'
+            b'Content-Length: 12\r\n\r\nbad request\n')
+
+    class Peer:
+        def __init__(self, wire, error):
+            self.wire = wire
+            self.error = error
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def sendall(self, request):
+            assert request == b'request'
+
+        def shutdown(self, how):
+            assert how == socket.SHUT_WR
+            if self.error is not None:
+                raise OSError(self.error, 'modeled half-close failure')
+
+        def recv(self, size):
+            assert size == 4096
+            if self.wire is None:
+                raise ConnectionResetError(errno.ECONNRESET, 'modeled peer reset')
+            wire, self.wire = self.wire, None
+            return wire
+
+    def check(wire, error):
+        with patch.object(socket, 'create_connection', return_value=Peer(wire, error)):
+            response, body = parse(exchange(1, b'request'))
+        assert response.status == 400 and body == b'bad request\n'
+        assert int(response.getheader('Content-Length')) == len(body)
+
+    for error in (None, errno.ENOTCONN):
+        check(good, error)
+    try:
+        check(good, errno.EPERM)
+    except OSError as exc:
+        assert exc.errno == errno.EPERM
+    else:
+        raise AssertionError('unexpected shutdown error was swallowed')
+    for wire in (b'', good[:-1], good.replace(b'400 Bad Request', b'200 OK'),
+                 good.replace(b'bad request\n', b'wrong reply\n'),
+                 good.replace(b'Connection: close', b'Connection: alive')):
+        try:
+            check(wire, errno.ENOTCONN)
+        except (AssertionError, http.client.HTTPException):
+            pass
+        else:
+            raise AssertionError('invalid rejection response was accepted')
 
 
 def run():
@@ -183,4 +249,6 @@ def run():
     print('cuhealth socket: pass')
 
 
-run()
+if __name__ == '__main__':
+    test_exchange()
+    run()
