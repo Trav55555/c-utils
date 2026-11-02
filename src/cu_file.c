@@ -70,9 +70,14 @@ int cu_file_read(CuArena *a, const char *path, CuStr *out)
                 cap = 4096;
         }
     } else {
-        /* A failed size seek may have moved the stream. Rewind when
-         * possible; on a fresh nonseekable stream it has consumed no data. */
-        rewind(f);
+        /* A failed size seek may have moved the stream and can have set
+         * the error indicator. A stream whose position is unknown has
+         * consumed nothing, so clearing the indicator is enough. For a
+         * stream with a known position, go back to the start; a failed
+         * repositioning is an I/O failure, not a successful empty read. */
+        clearerr(f);
+        if (ftell(f) != -1 && fseek(f, 0, SEEK_SET) != 0)
+            ok = 0;
     }
     /* Read one byte before trusting that size: a directory opens on some
      * systems, reports a huge size on others (ext4), and fails to read. */

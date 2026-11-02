@@ -113,6 +113,17 @@ int main(void)
     assert(!cu_arena_failed(&a));
     fail_rewind = 0;
     clobber_close_errno = 0;
+    /* A failed size seek that moved the stream, with a repositioning that
+     * also fails: an I/O failure, not a successful empty read. */
+    fail_end_seek = 1;
+    fail_rewind = 1;
+    s = CU_LIT("unset");
+    errno = 0;
+    assert(!file_read_probe(&a, path, &s));
+    assert(s.len == 0 && errno == ERANGE);
+    assert(!cu_arena_failed(&a));
+    fail_end_seek = 0;
+    fail_rewind = 0;
     fail_close = 1;
     assert(!file_read_probe(&a, path, &s));
     assert(s.len == 0 && errno == ERANGE);
