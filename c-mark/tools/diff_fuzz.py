@@ -13,7 +13,13 @@ The oracle's stdin mode takes only its -hugo/-unsafe flags, so the Hugo
 sets run one oracle process per document on raw bytes, including invalid
 UTF-8. The other sets go through the oracle's -cases JSON mode in one
 process; JSON cannot carry invalid UTF-8 (Go rewrites it to U+FFFD), so
-those sets draw only from the valid-UTF-8 tokens.
+those sets draw only from the valid-UTF-8 tokens, and the driver's bytes
+are compared after the same rewriting when goldmark's output itself held
+invalid UTF-8 (which the Hugo sets then check byte for byte).
+
+goldmark panics on a few documents (table.go reading past the source's
+capacity, linkParser.Parse peeking past a block); those count as oracle
+errors, not mismatches, and are listed.
 
 A mismatch is shrunk (lines first, then bytes, keeping the mismatch) and
 saved under --save as a directory per case: input.md, expected.html
@@ -27,6 +33,7 @@ cases through the driver alone.
 Standard library only. Exit 0 when every document agrees, 1 otherwise.
 """
 import argparse
+import codecs
 import concurrent.futures
 import hashlib
 import json
@@ -163,6 +170,22 @@ class Mismatch:
         self.note = note
 
 
+def _one_byte_fffd(err):
+    """Error handler that replaces exactly one byte, as Go's encoding/json
+    does with invalid UTF-8 (Python's own handler takes the maximal invalid
+    subpart)."""
+    return "�", err.start + 1
+
+
+codecs.register_error("go-json", _one_byte_fffd)
+
+
+def go_json_text(b):
+    """b as Go's encoding/json would have written it: UTF-8 with every
+    invalid byte replaced by U+FFFD."""
+    return b.decode("utf-8", "go-json").encode("utf-8")
+
+
 def run(cmd, data, timeout):
     try:
         p = subprocess.run(cmd, input=data, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
@@ -196,30 +219,36 @@ class Runner:
         return self.oracle_many(opts, [doc])[0]
 
     def oracle_many(self, opts, docs):
-        """The oracle's bytes for valid-UTF-8 documents through -cases."""
+        """The oracle's bytes for valid-UTF-8 documents through -cases. A
+        document goldmark panics on takes the whole batch down, so a failed
+        batch is bisected until the panicking documents stand alone."""
         cases = [{"options": opts.options, "markdown": d.decode("utf-8")} for d in docs]
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "cases.json")
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(cases, f, ensure_ascii=True)
             rc, out, err = run([self.oracle, "-cases", path], b"", 600)
-        if rc != 0:
-            self.oracle_errors.append((opts, b"<batch of %d>" % len(docs), err))
-            return [None] * len(docs)
-        return [s.encode("utf-8") for s in json.loads(out.decode("utf-8"))]
+        if rc == 0:
+            return [s.encode("utf-8") for s in json.loads(out.decode("utf-8"))]
+        if len(docs) == 1:
+            self.oracle_errors.append((opts, docs[0], err))
+            return [None]
+        half = len(docs) // 2
+        return self.oracle_many(opts, docs[:half]) + self.oracle_many(opts, docs[half:])
 
     def compare(self, opts, doc, want):
-        """A Mismatch for doc, or None when the driver agrees with want."""
+        """A Mismatch for doc, or None when the driver agrees with want. For
+        a set that went through JSON, output goldmark wrote with invalid
+        UTF-8 (a tab-split table row that starts inside a multibyte
+        character) reached us with each bad byte rewritten as U+FFFD, so
+        the driver's bytes are compared after the same rewriting."""
         if want is None:
             return None
         got, note = self.render_c(opts, doc)
         if got == want:
             return None
-        if not note and not opts.raw:
-            try:
-                got.decode("utf-8")
-            except UnicodeDecodeError:
-                note = "driver output is not UTF-8; the oracle's went through JSON"
+        if not note and not opts.raw and go_json_text(got) == want:
+            return None
         return Mismatch(opts, doc, want, got, note)
 
     def mismatches(self, opts, docs):
