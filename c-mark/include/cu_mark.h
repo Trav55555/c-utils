@@ -50,10 +50,12 @@ typedef enum CuMarkTableAlign {
 
 /* One fenced code block, borrowed for the duration of the hook call.
  * info is the whole info string (empty when there is none); lang is
- * goldmark's Language(): info up to the first space or '{'; text is the
- * content lines, each with its newline, exactly as goldmark stores them.
- * attrs holds the block's {...} attributes as name/value pairs in source
- * order (values unquoted, entities not decoded), count in attr_count. */
+ * goldmark's Language(): info up to its first space; text is the content
+ * lines, each with its newline, exactly as goldmark stores them (an indent
+ * that split a tab appears as spaces). attrs holds the node's attributes
+ * with string values as name/value pairs in source order (values unquoted,
+ * entities not decoded), count in attr_count; goldmark's core gives fenced
+ * code blocks no attributes, so the count is 0 until an extension does. */
 typedef struct CuMarkAttr {
     CuStr name;
     CuStr value;
@@ -87,16 +89,25 @@ typedef enum CuMarkStatus {
 
 /* Bounds. goldmark has none; a dependable renderer needs them. An input
  * inside them renders exactly as goldmark renders it; one outside them is
- * refused whole (CU_MARK_LIMIT), never rendered differently. */
+ * refused whole (CU_MARK_LIMIT), never rendered differently. The depth
+ * bound counts block containers (blockquotes, lists and list items) on the
+ * path from the document, so CU_MARK_MAX_DEPTH nested blockquotes, or half
+ * as many nested lists, render; it also bounds the nesting of {...} and
+ * [...] attribute values, which goldmark parses recursively. Everything
+ * else here is iterative, so no other input shape grows the stack. */
 #define CU_MARK_MAX_INPUT  (16UL << 20)  /* bytes */
 #define CU_MARK_MAX_DEPTH  256           /* nested block containers */
 
-/* Renders src (any bytes; invalid UTF-8 is handled as goldmark handles it)
- * and appends the HTML to out. scratch holds the document tree and is used
- * under a temp scope that is ended before returning, so it may be the
- * builder's arena only if the builder was initialised outside that scope;
- * pass a separate arena when in doubt. On a status other than CU_MARK_OK,
- * out may hold a partial document and should be discarded. */
+/* Renders src (any bytes; invalid UTF-8 and NUL are handled as goldmark
+ * handles them, and nothing is normalised first, as goldmark normalises
+ * nothing) and appends the HTML to out. scratch holds the document tree
+ * under a temp scope that is ended before returning; it must not be the
+ * builder's arena, since appending to out under that scope would abort
+ * (cu.h, containers and scopes). Memory in scratch is proportional to the
+ * input, roughly a node per line and per inline element; cap it with
+ * cu_arena_set_limit for untrusted input, which ends as CU_MARK_NOMEM. On a
+ * status other than CU_MARK_OK, out may hold a partial document and should
+ * be discarded. */
 CU_MUST_USE CuMarkStatus cu_mark_render(CuArena *scratch, CuStr src, const CuMarkOptions *opt, CuBuilder *out);
 
 #endif
