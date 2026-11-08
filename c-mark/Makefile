@@ -7,8 +7,12 @@ LIBSRC := $(wildcard ../src/*.c)
 MARKSRC := $(wildcard src/*.c)
 MARKHDR := $(wildcard include/*.h) $(wildcard src/*.h)
 ORACLE := $(BUILD)/oracle
+DRIVER := $(BUILD)/mark_render
+# diff-fuzz: the seed and the number of documents per option set.
+SEED ?= 1
+N ?= 2000
 
-.PHONY: test test-core report check corpus
+.PHONY: test test-core report check corpus diff-fuzz
 test: $(BUILD)/test_mark $(BUILD)/test_ext $(BUILD)/test_corpus
 	$(BUILD)/test_mark
 	$(BUILD)/test_ext
@@ -36,6 +40,15 @@ $(ORACLE): oracle/*.go oracle/go.mod oracle/go.sum | $(BUILD)
 	cd oracle && GOTOOLCHAIN=local go build -o $(abspath $@) .
 corpus: $(ORACLE)
 	$(ORACLE) -corpus "$$(cd oracle && GOTOOLCHAIN=local go list -m -f '{{.Dir}}' github.com/yuin/goldmark)" > tests/corpus.json
+
+# Differential fuzzing against the oracle (tools/diff_fuzz.py): random
+# documents from SEED, N per option set, every byte compared; mismatches
+# are minimised and saved under tests/diff_fuzz/. Needs Go; never part of
+# make test.
+$(DRIVER): tools/mark_render.c $(MARKSRC) $(MARKHDR) ../include/cu.h $(LIBSRC) | $(BUILD)
+	$(CC) $(STRICT) $(CFLAGS) $(DEFINES) -Iinclude -I../include -o $@ $< $(MARKSRC) $(LIBSRC)
+diff-fuzz: $(DRIVER) $(ORACLE)
+	python3 -I tools/diff_fuzz.py --oracle $(ORACLE) --driver $(DRIVER) --seed $(SEED) --count $(N) --save tests/diff_fuzz
 
 check:
 	$(DCHECK) gate
