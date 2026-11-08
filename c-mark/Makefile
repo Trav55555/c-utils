@@ -9,8 +9,9 @@ MARKHDR := $(wildcard include/*.h) $(wildcard src/*.h)
 ORACLE := $(BUILD)/oracle
 
 .PHONY: test test-core report check corpus
-test: $(BUILD)/test_mark $(BUILD)/test_corpus
+test: $(BUILD)/test_mark $(BUILD)/test_ext $(BUILD)/test_corpus
 	$(BUILD)/test_mark
+	$(BUILD)/test_ext
 	$(BUILD)/test_corpus tests/corpus.json
 
 # What the core port covers: the targeted tests and the corpus suites that
