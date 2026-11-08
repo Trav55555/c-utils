@@ -1,8 +1,9 @@
-/* goldmark parser/parser.go as C: the parse context, auto heading ids, the
- * block driver
+/* goldmark parser/parser.go as C: the parse context, auto heading ids (and
+ * Hugo's idFactory from markup/goldmark/autoid.go), the block driver
  * (parseBlocks, openBlocks, closeBlocks), the inline driver (parseBlock)
  * and the transformer calls. Each function names the Go function it ports. */
 #include "mark_parser.h"
+#include "mark_unicode.h"
 #include "mark_util.h"
 
 /* ---- Context (parser.parseContext) ---- */
@@ -117,7 +118,109 @@ static CuStr ids_numbered(MarkCtx *ctx, CuStr base)
     return result;
 }
 
-/* ids.Generate for ast.KindHeading. */
+/* utf8.DecodeLastRune */
+static unsigned long decode_last_rune(const unsigned char *p, long n, long *size)
+{
+    long start;
+    long lim;
+    unsigned long r;
+    long sz;
+
+    if (n <= 0) {
+        *size = 0;
+        return MARK_RUNE_ERROR;
+    }
+    if (p[n - 1] < 0x80) {
+        *size = 1;
+        return p[n - 1];
+    }
+    lim = n - 4;
+    if (lim < 0) lim = 0;
+    for (start = n - 1; start > lim; start--) {
+        if (mark_rune_start(p[start])) break;
+    }
+    r = mark_decode_rune(p + start, n - start, &sz);
+    if (start + sz != n) {
+        *size = 1;
+        return MARK_RUNE_ERROR;
+    }
+    *size = sz;
+    return r;
+}
+
+/* bytes.TrimSpace: unicode.IsSpace runes cut from both ends. */
+static CuStr trim_unicode_space(CuStr s)
+{
+    const unsigned char *p = (const unsigned char *)s.ptr;
+    long start = 0;
+    long stop = (long)s.len;
+
+    while (start < stop) {
+        long size;
+        unsigned long r = mark_decode_rune(p + start, stop - start, &size);
+
+        if (!mark_is_space(r)) break;
+        start += size;
+    }
+    while (stop > start) {
+        long size;
+        unsigned long r = decode_last_rune(p + start, stop - start, &size);
+
+        if (!mark_is_space(r)) break;
+        stop -= size;
+    }
+    return cu_str_n(s.ptr + start, (size_t)(stop - start));
+}
+
+/* autoid.go isAlphaNumeric */
+static int hugo_is_alpha_numeric(unsigned long r)
+{
+    return r == '_' || mark_is_letter(r) || mark_is_digit(r);
+}
+
+/* autoid.go sanitizeAnchorNameWithHook with idFactory.Generate's hook, for
+ * ast.KindHeading: letters and digits lower-cased, '-' and ' ' as '-',
+ * everything else dropped; "heading" when nothing is left; "-<n>" when
+ * taken. Invalid UTF-8 decodes as U+FFFD, which is dropped. */
+static CuStr hugo_ids_generate(MarkCtx *ctx, CuStr value)
+{
+    CuBuilder b;
+    CuStr result;
+    const unsigned char *s;
+    long i;
+    long len;
+    int one = 1;
+
+    value = trim_unicode_space(value);
+    s = (const unsigned char *)value.ptr;
+    len = (long)value.len;
+    cu_sb_init(&b, ctx->arena);
+    for (i = 0; i < len;) {
+        long size;
+        unsigned long r = mark_decode_rune(s + i, len - i, &size);
+
+        if (r == '-' || r == ' ') {
+            cu_sb_char(&b, '-');
+        } else if (hugo_is_alpha_numeric(r)) {
+            unsigned char buf[4];
+            long n = mark_encode_rune(buf, mark_to_lower(r));
+
+            cu_sb_str(&b, cu_str_n((const char *)buf, (size_t)n));
+        }
+        i += size;
+    }
+    if (b.len == 0) cu_sb_str(&b, CU_LIT("heading"));
+    if (!cu_sb_finish(&b, &result)) {
+        ctx->failed = 1;
+        return cu_str_empty();
+    }
+    if (CU_MAP_GET(&ctx->ids, int, result) != NULL) return ids_numbered(ctx, result);
+    if (CU_MAP_UPSERT(&ctx->ids, int, result, &one) == NULL) ctx->failed = 1;
+    return result;
+}
+
+/* ids.Generate for ast.KindHeading, or idFactory.Generate under
+ * CU_MARK_HUGO_IDS. */
 CuStr mark_ids_generate(MarkCtx *ctx, CuStr value)
 {
     CuBuilder b;
@@ -126,6 +229,7 @@ CuStr mark_ids_generate(MarkCtx *ctx, CuStr value)
     size_t i;
     int one = 1;
 
+    if (ctx->flags & CU_MARK_HUGO_IDS) return hugo_ids_generate(ctx, value);
     value = mark_trim_spaces(value);
     s = (const unsigned char *)value.ptr;
     cu_sb_init(&b, ctx->arena);
