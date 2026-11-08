@@ -1,0 +1,13 @@
+{
+  "driver_args": [
+    "-hugo",
+    "-unsafe"
+  ],
+  "note": "",
+  "oracle_args": [
+    "-hugo",
+    "-unsafe"
+  ],
+  "seed": 4,
+  "set": "hugo-unsafe"
+}

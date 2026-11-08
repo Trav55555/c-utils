@@ -284,7 +284,7 @@ static int code_span_is_blank(const MarkCtx *ctx, const MarkNode *n)
     const MarkNode *c;
 
     for (c = n->first; c != NULL; c = c->next) {
-        MarkLine v = mark_segment_value(c->segment, ctx->src, ctx->src_len);
+        MarkLine v = mark_segment_value(c->segment, ctx->src, ctx->src_cap);
 
         if (!mark_line_is_blank(v)) return 0;
     }

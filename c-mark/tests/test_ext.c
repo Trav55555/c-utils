@@ -29,6 +29,17 @@ static const Case oracle_cases[] = {
     /* table.go computes cell positions from the padded line: a tab-indented table in a list item reads shifted bytes */
     {CU_MARK_HUGO | CU_MARK_UNSAFE, CU_MARK_ALIGN_DEFAULT, "- \t| a |\n\t|---|\n\t| `\\|` x |\n",
      {"<ul>\n<li>\n<table>\n<thead>\n<tr>\n<th>a</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td><code>|</code> x</td>\n</tr>\n</tbody>\n</table>\n</li>\n</ul>\n", NULL, NULL}},
+    /* a tab-split row at the end of the source: parseRow's positions run
+     * past it, and the zero bytes Go's slice capacity yields render as
+     * U+FFFD (found by tools/diff_fuzz.py; one byte past, padding 1) */
+    {CU_MARK_HUGO | CU_MARK_UNSAFE, CU_MARK_ALIGN_DEFAULT, "1. a\n-|\n\th",
+     {"<ol>\n<li>\n<table>\n<thead>\n<tr>\n<th>a</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>\357\277\275</td>\n</tr>\n</tbody>\n</table>\n</li>\n</ol>\n", NULL, NULL}},
+    /* the same two bytes past (padding 2), after a row within the source */
+    {CU_MARK_HUGO | CU_MARK_UNSAFE, CU_MARK_ALIGN_DEFAULT, "* 0\n|--|\n\\<?x \n\t{",
+     {"<ul>\n<li>\n<table>\n<thead>\n<tr>\n<th>0</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>&lt;?x</td>\n</tr>\n<tr>\n<td>\357\277\275</td>\n</tr>\n</tbody>\n</table>\n</li>\n</ul>\n", NULL, NULL}},
+    /* the same with cell bytes before the end: the last two are replaced, not the whole cell */
+    {CU_MARK_HUGO | CU_MARK_UNSAFE, CU_MARK_ALIGN_DEFAULT, "- a\n-|\n\t{xy",
+     {"<ul>\n<li>\n<table>\n<thead>\n<tr>\n<th>a</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>y\357\277\275\357\277\275</td>\n</tr>\n</tbody>\n</table>\n</li>\n</ul>\n", NULL, NULL}},
     /* escaped pipes: split out of code spans, kept as text elsewhere */
     {CU_MARK_HUGO | CU_MARK_UNSAFE, CU_MARK_ALIGN_DEFAULT, "| `a\\|b` | c |\n|---|---|\n| `x\\|y\\|z` | \\| |\n",
      {"<table>\n<thead>\n<tr>\n<th><code>a|b</code></th>\n<th>c</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td><code>x|y|z</code></td>\n<td>|</td>\n</tr>\n</tbody>\n</table>\n", NULL, NULL}},

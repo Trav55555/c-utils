@@ -59,10 +59,20 @@ typedef struct MarkBlock {
     MarkBlockParserId parser;
 } MarkBlock;
 
+/* goldmark's table parser computes cell positions from the padded line
+ * (parseRow), so a tab-split row at the very end of the source reads up to
+ * three bytes past it. Go's slice capacity lets the read succeed, and the
+ * bytes are the zeros io.ReadAll left there, which the renderer writes as
+ * U+FFFD. The parser works on a copy of the source with that many zero
+ * bytes after it, so the same positions read the same bytes: src_len is
+ * the source's length, src_cap the readable length. */
+#define MARK_SRC_SLACK 3
+
 typedef struct MarkCtx {
     CuArena *arena;
     const unsigned char *src;
     long src_len;
+    long src_cap;
     unsigned long flags; /* CU_MARK_* option bits */
     int failed;
     int limit;

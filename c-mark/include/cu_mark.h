@@ -104,10 +104,10 @@ typedef enum CuMarkStatus {
  * under a temp scope that is ended before returning; it must not be the
  * builder's arena, since appending to out under that scope would abort
  * (cu.h, containers and scopes). Memory in scratch is proportional to the
- * input, roughly a node per line and per inline element; cap it with
- * cu_arena_set_limit for untrusted input, which ends as CU_MARK_NOMEM. On a
- * status other than CU_MARK_OK, out may hold a partial document and should
- * be discarded. */
+ * input: a copy of it, then roughly a node per line and per inline
+ * element; cap it with cu_arena_set_limit for untrusted input, which ends
+ * as CU_MARK_NOMEM. On a status other than CU_MARK_OK, out may hold a
+ * partial document and should be discarded. */
 CU_MUST_USE CuMarkStatus cu_mark_render(CuArena *scratch, CuStr src, const CuMarkOptions *opt, CuBuilder *out);
 
 #endif

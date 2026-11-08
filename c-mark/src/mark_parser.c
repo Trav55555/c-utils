@@ -10,11 +10,23 @@
 
 void mark_ctx_init(MarkCtx *ctx, CuArena *a, CuStr src, unsigned long flags)
 {
+    unsigned char *copy = CU_PUSH(a, unsigned char, src.len + MARK_SRC_SLACK);
+
     ctx->arena = a;
-    ctx->src = (const unsigned char *)src.ptr;
     ctx->src_len = (long)src.len;
     ctx->flags = flags;
     ctx->failed = 0;
+    if (copy == NULL) {
+        /* parse the caller's bytes anyway; the status will be NOMEM */
+        ctx->src = (const unsigned char *)src.ptr;
+        ctx->src_cap = ctx->src_len;
+        ctx->failed = 1;
+    } else {
+        if (src.len > 0) memcpy(copy, src.ptr, src.len);
+        memset(copy + src.len, 0, MARK_SRC_SLACK);
+        ctx->src = copy;
+        ctx->src_cap = ctx->src_len + MARK_SRC_SLACK;
+    }
     ctx->limit = 0;
     CU_MAP_INIT(&ctx->refs, a, MarkReference);
     CU_MAP_INIT(&ctx->ids, a, int);
@@ -740,7 +752,7 @@ static void parse_block(MarkCtx *ctx, MarkReader *block, MarkNode *parent)
         if ((line_break_flags & (LINE_BREAK_HARD | LINE_BREAK_VISIBLE)) == (LINE_BREAK_HARD | LINE_BREAK_VISIBLE)) {
             text = mark_text_new(ctx->arena, diff);
         } else {
-            text = mark_text_new(ctx->arena, mark_segment_trim_right_space(diff, ctx->src, ctx->src_len));
+            text = mark_text_new(ctx->arena, mark_segment_trim_right_space(diff, ctx->src, ctx->src_cap));
         }
         if (text == NULL) {
             ctx->failed = 1;
@@ -778,7 +790,7 @@ MarkNode *mark_parse(MarkCtx *ctx)
     parse_blocks(ctx, root, &reader);
     if (ctx->failed || ctx->limit) return NULL;
 
-    mark_block_reader_init(&block, ctx->src, ctx->src_len, NULL);
+    mark_block_reader_init(&block, ctx->src, ctx->src_cap, NULL);
     n = root;
     while (n->first != NULL) n = n->first;
     for (;;) {

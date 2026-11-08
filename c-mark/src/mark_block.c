@@ -452,7 +452,7 @@ static void generate_auto_heading_id(MarkCtx *ctx, MarkNode *node)
 
     if (last_index > -1) {
         MarkSegment last = mark_lines_at(node->lines, last_index);
-        MarkLine l = mark_segment_value(last, ctx->src, ctx->src_len);
+        MarkLine l = mark_segment_value(last, ctx->src, ctx->src_cap);
 
         line = mark_line_slice(ctx->arena, l, 0, mark_line_len(l));
     }
@@ -478,7 +478,7 @@ static void parse_last_line_attributes(MarkCtx *ctx, MarkNode *node)
 
     if (last_index < 0) return; /* empty headings */
     last_line = mark_lines_at(node->lines, last_index);
-    lv = mark_segment_value(last_line, ctx->src, ctx->src_len);
+    lv = mark_segment_value(last_line, ctx->src, ctx->src_cap);
     line = mark_line_slice(ctx->arena, lv, 0, mark_line_len(lv));
     mark_reader_init(&lr, (const unsigned char *)line.ptr, (long)line.len);
     CU_VEC_INIT(&attrs, ctx->arena, MarkAttr);
@@ -631,7 +631,7 @@ static void setext_close(MarkCtx *ctx, MarkNode *node, MarkReader *r)
     if (cu_vec_len(tmp_lines) == 0) {
         MarkNode *next = node->next;
 
-        segment = mark_segment_trim_left_space(segment, ctx->src, ctx->src_len);
+        segment = mark_segment_trim_left_space(segment, ctx->src, ctx->src_cap);
         if (next == NULL || next->kind != MARK_PARAGRAPH) {
             MarkNode *para = mark_node_new(ctx->arena, MARK_PARAGRAPH);
 
@@ -1060,7 +1060,7 @@ static unsigned code_block_continue(MarkCtx *ctx, MarkNode *node, MarkReader *r)
 
     if (mark_line_is_blank(line)) {
         mark_lines_append(ctx, mark_node_lines(ctx->arena, node),
-                          mark_segment_trim_left_space_width(seg, 4, ctx->src, ctx->src_len));
+                          mark_segment_trim_left_space_width(seg, 4, ctx->src, ctx->src_cap));
         return MARK_STATE_CONTINUE | MARK_STATE_NO_CHILDREN;
     }
     pos = mark_line_indent_position(line, mark_reader_line_offset(r), 0, 4, &padding);
@@ -1083,7 +1083,7 @@ static void code_block_close(MarkCtx *ctx, MarkNode *node, MarkReader *r)
     if (lines == NULL) return;
     length = (long)cu_vec_len(lines) - 1;
     while (length >= 0) {
-        MarkLine l = mark_segment_value(mark_lines_at(lines, length), ctx->src, ctx->src_len);
+        MarkLine l = mark_segment_value(mark_lines_at(lines, length), ctx->src, ctx->src_cap);
 
         if (mark_line_is_blank(l)) length--;
         else break;
@@ -1701,7 +1701,7 @@ static unsigned html_block_continue(MarkCtx *ctx, MarkNode *node, MarkReader *r)
     switch (node->html_block_type) {
     case 1:
         if (cu_vec_len(lines) == 1) {
-            MarkLine first = mark_segment_value(mark_lines_at(lines, 0), ctx->src, ctx->src_len);
+            MarkLine first = mark_segment_value(mark_lines_at(lines, 0), ctx->src, ctx->src_cap);
 
             if (html_type1_close(first)) return MARK_STATE_CLOSE;
         }
@@ -1722,7 +1722,7 @@ static unsigned html_block_continue(MarkCtx *ctx, MarkNode *node, MarkReader *r)
         else if (node->html_block_type == 4) closure = CU_LIT(">");
         else closure = CU_LIT("]]>");
         if (cu_vec_len(lines) == 1) {
-            MarkLine first = mark_segment_value(mark_lines_at(lines, 0), ctx->src, ctx->src_len);
+            MarkLine first = mark_segment_value(mark_lines_at(lines, 0), ctx->src, ctx->src_cap);
 
             if (mark_line_index(first, closure) >= 0) return MARK_STATE_CLOSE;
         }
@@ -1755,7 +1755,7 @@ static MarkNode *paragraph_open(MarkCtx *ctx, MarkNode *parent, MarkReader *r, u
     (void)parent;
     *state = MARK_STATE_NO_CHILDREN;
     mark_reader_peek_line(r, &segment);
-    segment = mark_segment_trim_left_space(segment, ctx->src, ctx->src_len);
+    segment = mark_segment_trim_left_space(segment, ctx->src, ctx->src_cap);
     if (mark_segment_is_empty(segment)) return NULL;
     node = mark_node_new(ctx->arena, MARK_PARAGRAPH);
     if (node == NULL) {
@@ -1796,8 +1796,8 @@ static void paragraph_close(MarkCtx *ctx, MarkNode *node, MarkReader *r)
     if (len != 0) {
         MarkSegment *d = CU_VEC_DATA(lines, MarkSegment);
 
-        for (i = 0; i < len; i++) d[i] = mark_segment_trim_left_space(d[i], ctx->src, ctx->src_len);
-        d[len - 1] = mark_segment_trim_right_space(d[len - 1], ctx->src, ctx->src_len);
+        for (i = 0; i < len; i++) d[i] = mark_segment_trim_left_space(d[i], ctx->src, ctx->src_cap);
+        d[len - 1] = mark_segment_trim_right_space(d[len - 1], ctx->src, ctx->src_cap);
     }
     if (len == 0 && node->parent != NULL) mark_node_remove_child(node->parent, node);
 }
@@ -1962,7 +1962,7 @@ void mark_link_reference_transform(MarkCtx *ctx, MarkNode *node, MarkReader *r)
         ctx->failed = 1;
         return;
     }
-    mark_block_reader_init(&block, ctx->src, ctx->src_len, lines);
+    mark_block_reader_init(&block, ctx->src, ctx->src_cap, lines);
     CU_VEC_INIT(&removes, ctx->arena, long);
     for (;;) {
         long start;

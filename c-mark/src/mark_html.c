@@ -269,7 +269,7 @@ static void write_lines(Renderer *r, const MarkNode *n)
     for (i = 0; i < l; i++) {
         MarkSegment s = mark_lines_at(n->lines, (long)i);
 
-        raw_write_line(r, mark_segment_value(s, r->ctx->src, r->ctx->src_len));
+        raw_write_line(r, mark_segment_value(s, r->ctx->src, r->ctx->src_cap));
     }
 }
 
@@ -331,14 +331,14 @@ static int call_code_hook(Renderer *r, MarkNode *n)
     if (r->opt == NULL || r->opt->code_hook == NULL) return 0;
     code.info = cu_str_empty();
     if (n->info != NULL) {
-        MarkLine info = mark_segment_value(n->info->segment, r->ctx->src, r->ctx->src_len);
+        MarkLine info = mark_segment_value(n->info->segment, r->ctx->src, r->ctx->src_cap);
 
         code.info = mark_line_slice(r->ctx->arena, info, 0, mark_line_len(info));
     }
-    code.lang = mark_fenced_language(n, r->ctx->src, r->ctx->src_len, &has);
+    code.lang = mark_fenced_language(n, r->ctx->src, r->ctx->src_cap, &has);
     cu_sb_init(&text, r->ctx->arena);
     for (i = 0; i < l; i++) {
-        MarkLine line = mark_segment_value(mark_lines_at(n->lines, (long)i), r->ctx->src, r->ctx->src_len);
+        MarkLine line = mark_segment_value(mark_lines_at(n->lines, (long)i), r->ctx->src, r->ctx->src_cap);
         long k;
 
         for (k = 0; k < line.pad; k++) cu_sb_char(&text, ' ');
@@ -376,7 +376,7 @@ static void render_fenced_code_block(Renderer *r, MarkNode *n)
 
     if (call_code_hook(r, n)) return;
     write_str(r, "<pre><code");
-    language = mark_fenced_language(n, r->ctx->src, r->ctx->src_len, &has);
+    language = mark_fenced_language(n, r->ctx->src, r->ctx->src_cap, &has);
     if (has) {
         write_str(r, " class=\"language-");
         writer_write(r, language);
@@ -396,13 +396,13 @@ static void render_html_block(Renderer *r, const MarkNode *n, int entering)
             size_t i;
 
             for (i = 0; i < l; i++) {
-                secure_write(r, mark_segment_value(mark_lines_at(n->lines, (long)i), r->ctx->src, r->ctx->src_len));
+                secure_write(r, mark_segment_value(mark_lines_at(n->lines, (long)i), r->ctx->src, r->ctx->src_cap));
             }
         } else {
             write_str(r, "<!-- raw HTML omitted -->\n");
         }
     } else if (n->closure_line.start >= 0) { /* HTMLBlock.HasClosure */
-        if (r->unsafe) secure_write(r, mark_segment_value(n->closure_line, r->ctx->src, r->ctx->src_len));
+        if (r->unsafe) secure_write(r, mark_segment_value(n->closure_line, r->ctx->src, r->ctx->src_cap));
         else write_str(r, "<!-- raw HTML omitted -->\n");
     }
 }
@@ -530,7 +530,7 @@ static void write_url(Renderer *r, CuStr url, int resolve)
 static CuStr leaf_text(Renderer *r, const MarkNode *c)
 {
     if (c->kind == MARK_TEXT || c->kind == MARK_DELIMITER || c->kind == MARK_LINK_LABEL_STATE) {
-        MarkLine l = mark_segment_value(c->segment, r->ctx->src, r->ctx->src_len);
+        MarkLine l = mark_segment_value(c->segment, r->ctx->src, r->ctx->src_cap);
 
         return mark_line_slice(r->ctx->arena, l, 0, mark_line_len(l));
     }
@@ -570,7 +570,7 @@ static CuStr autolink_label(Renderer *r, const MarkNode *n)
 /* Renderer.renderAutoLink */
 static void render_auto_link(Renderer *r, const MarkNode *n)
 {
-    CuStr url = mark_autolink_url(r->ctx->arena, n, r->ctx->src, r->ctx->src_len);
+    CuStr url = mark_autolink_url(r->ctx->arena, n, r->ctx->src, r->ctx->src_cap);
     CuStr label = autolink_label(r, n);
 
     if (cu_arena_failed(r->ctx->arena)) {
@@ -604,7 +604,7 @@ static void render_code_span(Renderer *r, const MarkNode *n)
         write_str(r, "<code>");
     }
     for (c = n->first; c != NULL; c = c->next) {
-        MarkLine value = mark_segment_value(c->segment, r->ctx->src, r->ctx->src_len);
+        MarkLine value = mark_segment_value(c->segment, r->ctx->src, r->ctx->src_cap);
         long len = mark_line_len(value);
 
         if (len > 0 && mark_line_at(value, len - 1) == '\n') {
@@ -682,7 +682,7 @@ static void render_raw_html(Renderer *r, const MarkNode *n)
     }
     l = n->segments == NULL ? 0 : cu_vec_len(n->segments);
     for (i = 0; i < l; i++) {
-        MarkLine v = mark_segment_value(mark_lines_at(n->segments, (long)i), r->ctx->src, r->ctx->src_len);
+        MarkLine v = mark_segment_value(mark_lines_at(n->segments, (long)i), r->ctx->src, r->ctx->src_cap);
         long k;
 
         for (k = 0; k < v.pad; k++) cu_sb_char(r->w, ' ');
@@ -693,7 +693,7 @@ static void render_raw_html(Renderer *r, const MarkNode *n)
 /* Renderer.renderText on entering. EastAsianLineBreaks is off. */
 static void render_text(Renderer *r, const MarkNode *n)
 {
-    MarkLine v = mark_segment_value(n->segment, r->ctx->src, r->ctx->src_len);
+    MarkLine v = mark_segment_value(n->segment, r->ctx->src, r->ctx->src_cap);
 
     if (n->flags & MARK_TEXT_RAW) {
         raw_write_line(r, v);

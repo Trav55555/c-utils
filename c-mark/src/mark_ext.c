@@ -15,13 +15,15 @@ static MarkNode *node_new(MarkCtx *ctx, MarkKind kind)
     return n;
 }
 
-/* A segment clamped to the source, where Go would panic slicing past it
- * (table.go computes cell positions from a padded line, so a cell on the
- * last line of the input can reach past the source). */
+/* A segment clamped to the readable source: the input plus the zero bytes
+ * after it (MARK_SRC_SLACK, mark_parser.h). table.go computes cell
+ * positions from a padded line, so a cell on the last line of the input
+ * can reach past the source, where Go reads those zeros; further than
+ * that, Go would panic. */
 static MarkSegment clamp_segment(const MarkCtx *ctx, MarkSegment s)
 {
-    if (s.start > ctx->src_len) s.start = ctx->src_len;
-    if (s.stop > ctx->src_len) s.stop = ctx->src_len;
+    if (s.start > ctx->src_cap) s.start = ctx->src_cap;
+    if (s.stop > ctx->src_cap) s.stop = ctx->src_cap;
     if (s.start < 0) s.start = 0;
     if (s.stop < s.start) s.stop = s.start;
     return s;
@@ -120,7 +122,7 @@ static int range_is_blank(MarkLine line, long from, long to)
  * int), or NULL for Go's nil (not a delimiter row, or no columns). */
 static CuVec *parse_delimiter(MarkCtx *ctx, MarkSegment segment)
 {
-    MarkLine line = mark_segment_value(segment, ctx->src, ctx->src_len);
+    MarkLine line = mark_segment_value(segment, ctx->src, ctx->src_cap);
     long len = mark_line_len(line);
     long ncols = 1;
     long first = 0;
@@ -194,7 +196,7 @@ static MarkEscapedCell *escaped_cell_new(MarkCtx *ctx, MarkNode *cell)
  * the line has any). */
 static MarkNode *parse_row(MarkCtx *ctx, MarkSegment segment, CuVec *alignments, int is_header)
 {
-    MarkLine line = mark_segment_value(segment, ctx->src, ctx->src_len);
+    MarkLine line = mark_segment_value(segment, ctx->src, ctx->src_cap);
     long len = mark_line_len(line);
     long pos = mark_line_trim_left_space_len(line);
     long limit = len - mark_line_trim_right_space_len(line);
@@ -247,8 +249,8 @@ static MarkNode *parse_row(MarkCtx *ctx, MarkSegment segment, CuVec *alignments,
             }
         }
         seg = clamp_segment(ctx, mark_segment(segment.start + pos, segment.start + closure));
-        seg = mark_segment_trim_left_space(seg, ctx->src, ctx->src_len);
-        seg = mark_segment_trim_right_space(seg, ctx->src, ctx->src_len);
+        seg = mark_segment_trim_left_space(seg, ctx->src, ctx->src_cap);
+        seg = mark_segment_trim_right_space(seg, ctx->src, ctx->src_cap);
         lines = mark_node_lines(ctx->arena, cell);
         mark_lines_append(ctx, lines, seg);
         if (ctx->failed) return NULL;
@@ -501,7 +503,7 @@ MarkNode *mark_definition_description_open(MarkCtx *ctx, MarkNode *parent, MarkR
 
             if (term == NULL) return NULL;
             mark_lines_append(ctx, mark_node_lines(ctx->arena, term),
-                              mark_segment_trim_right_space(segment, ctx->src, ctx->src_len));
+                              mark_segment_trim_right_space(segment, ctx->src, ctx->src_cap));
             if (ctx->failed) return NULL;
             mark_node_append_child(parent, term);
         }
@@ -582,7 +584,7 @@ MarkNode *mark_footnote_block_open(MarkCtx *ctx, MarkNode *parent, MarkReader *r
     }
     padding = segment.padding;
     lv = mark_segment_value(clamp_segment(ctx, mark_segment(segment.start + open - padding, segment.start + closes - padding)),
-                            ctx->src, ctx->src_len);
+                            ctx->src, ctx->src_cap);
     label = mark_line_slice(ctx->arena, lv, 0, mark_line_len(lv));
     if (ctx->failed) return NULL;
     if (mark_is_blank((const unsigned char *)label.ptr, (long)label.len)) return NULL;
