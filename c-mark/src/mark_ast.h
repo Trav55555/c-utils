@@ -2,9 +2,10 @@
 #define MARK_AST_H
 #include "mark_text.h"
 
-/* goldmark's ast package (ast/ast.go, block.go, inline.go) plus the two
- * parser-private inline node types (parser.Delimiter, parser.linkLabelState)
- * that live in the tree while a block's inlines are parsed. One struct holds
+/* goldmark's ast package (ast/ast.go, block.go, inline.go), the extension
+ * nodes of extension/ast, plus the two parser-private inline node types
+ * (parser.Delimiter, parser.linkLabelState) that live in the tree while a
+ * block's inlines are parsed. One struct holds
  * every node type: the fields a kind does not use stay at their zero
  * values. Nodes are arena memory and are never freed individually; a node
  * detached from the tree stays valid, as goldmark's garbage-collected nodes
@@ -31,8 +32,28 @@ typedef enum MarkKind {
     MARK_AUTO_LINK,
     MARK_RAW_HTML,
     MARK_DELIMITER,
-    MARK_LINK_LABEL_STATE
+    MARK_LINK_LABEL_STATE,
+    /* extension/ast */
+    MARK_TABLE,
+    MARK_TABLE_HEADER,
+    MARK_TABLE_ROW,
+    MARK_TABLE_CELL,
+    MARK_STRIKETHROUGH,
+    MARK_TASK_CHECKBOX,
+    MARK_DEFINITION_LIST,
+    MARK_DEFINITION_TERM,
+    MARK_DEFINITION_DESCRIPTION,
+    MARK_FOOTNOTE_LINK,
+    MARK_FOOTNOTE_BACKLINK,
+    MARK_FOOTNOTE,
+    MARK_FOOTNOTE_LIST
 } MarkKind;
+
+/* extension/ast.Alignment */
+#define MARK_ALIGN_LEFT 1
+#define MARK_ALIGN_RIGHT 2
+#define MARK_ALIGN_CENTER 3
+#define MARK_ALIGN_NONE 4
 
 /* ast.Attribute. goldmark stores values as interface{}; the parser makes
  * strings, booleans, null, numbers, arrays and nested attribute maps, and
@@ -104,9 +125,10 @@ struct MarkNode {
     CuStr destination;
     CuStr title;
     int has_title;
-    /* AutoLink */
+    /* AutoLink; protocol is Go's nil when empty */
     int autolink_type;
     MarkNode *autolink_value;
+    CuStr protocol;
     /* RawHTML.Segments */
     CuVec *segments;
     /* Delimiter */
@@ -123,6 +145,21 @@ struct MarkNode {
     MarkNode *ll_next;
     MarkNode *ll_first;
     MarkNode *ll_last;
+    /* Table.Alignments (int), TableCell.Alignment */
+    CuVec *alignments;
+    int alignment;
+    /* TaskCheckBox.IsChecked */
+    int is_checked;
+    /* DefinitionList: Offset is offset above, TemporaryParagraph here;
+     * DefinitionDescription.IsTight is is_tight above */
+    MarkNode *temporary_paragraph;
+    /* Footnote.Ref and Index (-1 until referenced); FootnoteLink and
+     * FootnoteBacklink Index, RefCount, RefIndex; FootnoteList.Count */
+    CuStr ref;
+    long index;
+    long ref_count;
+    long ref_index;
+    long count;
 };
 
 /* A new node of kind with every field initialised; NULL on an arena
@@ -165,5 +202,9 @@ int mark_list_is_ordered(const MarkNode *list);
 CuStr mark_fenced_language(MarkNode *n, const unsigned char *src, long len, int *has);
 /* The depth of n: 0 for a node without a parent. */
 long mark_node_depth(const MarkNode *n);
+/* BaseNode.SortChildren with the footnote comparator (by index) */
+void mark_node_sort_children_by_index(MarkNode *n);
+/* AutoLink.URL: protocol + "://" + value when there is a protocol. */
+CU_MUST_USE CuStr mark_autolink_url(CuArena *a, const MarkNode *n, const unsigned char *src, long len);
 
 #endif

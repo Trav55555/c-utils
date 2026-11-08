@@ -2006,17 +2006,21 @@ void mark_link_reference_transform(MarkCtx *ctx, MarkNode *node, MarkReader *r)
     node->lines = lines;
 }
 
-/* ---- parser.DefaultBlockParsers ---- */
+/* ---- parser.DefaultBlockParsers and the extensions' block parsers ---- */
 
 const MarkBlockParser mark_block_parsers[MARK_BP_COUNT] = {
-    {setext_open, close_state, setext_close, 1, 0, "-="},
-    {thematic_open, close_state, close_nothing, 1, 0, "-*_"},
-    {list_open, list_continue, list_close, 1, 0, "-+*0123456789"},
-    {list_item_open, list_item_continue, close_nothing, 1, 0, "-+*0123456789"},
-    {code_block_open, code_block_continue, code_block_close, 0, 1, NULL},
-    {atx_open, close_state, atx_close, 1, 0, "#"},
-    {fenced_open, fenced_continue, fenced_close, 1, 0, "~`"},
-    {blockquote_open, blockquote_continue, close_nothing, 1, 0, ">"},
-    {html_block_open, html_block_continue, close_nothing, 1, 0, "<"},
-    {paragraph_open, paragraph_continue, paragraph_close, 0, 0, NULL},
+    {setext_open, close_state, setext_close, 1, 0, "-=", 0},
+    {mark_definition_list_open, mark_definition_list_continue, close_nothing, 1, 0, ":", CU_MARK_DEFINITION_LIST},
+    {mark_definition_description_open, mark_definition_description_continue, mark_definition_description_close, 1,
+     0, ":", CU_MARK_DEFINITION_LIST},
+    {thematic_open, close_state, close_nothing, 1, 0, "-*_", 0},
+    {list_open, list_continue, list_close, 1, 0, "-+*0123456789", 0},
+    {list_item_open, list_item_continue, close_nothing, 1, 0, "-+*0123456789", 0},
+    {code_block_open, code_block_continue, code_block_close, 0, 1, NULL, 0},
+    {atx_open, close_state, atx_close, 1, 0, "#", 0},
+    {fenced_open, fenced_continue, fenced_close, 1, 0, "~`", 0},
+    {blockquote_open, blockquote_continue, close_nothing, 1, 0, ">", 0},
+    {html_block_open, html_block_continue, close_nothing, 1, 0, "<", 0},
+    {mark_footnote_block_open, mark_footnote_block_continue, mark_footnote_block_close, 1, 0, "[", CU_MARK_FOOTNOTE},
+    {paragraph_open, paragraph_continue, paragraph_close, 0, 0, NULL, 0},
 };

@@ -1,6 +1,7 @@
-/* goldmark renderer/html/html.go as C, with the walk of renderer.go's
- * Render and ast.Walk done iteratively. Each function names the Go function
- * it ports. */
+/* goldmark renderer/html/html.go and the node renderers of extension/
+ * table.go, strikethrough.go, tasklist.go, definition_list.go and
+ * footnote.go as C, with the walk of renderer.go's Render and ast.Walk done
+ * iteratively. Each function names the Go function it ports. */
 #include "mark_html.h"
 #include "mark_util.h"
 
@@ -213,6 +214,17 @@ static const char *const image_attributes[] = {"align", "border", "crossorigin",
                                                "importance", "intrinsicsize", "ismap", "loading",
                                                "referrerpolicy", "sizes", "srcset", "usemap", "width", NULL};
 static const char *const no_attributes[] = {NULL};
+/* extension/table.go's filters */
+static const char *const table_attributes[] = {"align", "bgcolor", "border", "cellpadding", "cellspacing",
+                                               "frame", "rules", "summary", "width", NULL};
+static const char *const table_header_attributes[] = {"align", "bgcolor", "char", "charoff", "valign", NULL};
+static const char *const table_row_attributes[] = {"align", "bgcolor", "char", "charoff", "valign", NULL};
+static const char *const table_th_attributes[] = {"abbr", "align", "axis", "bgcolor", "char", "charoff",
+                                                  "colspan", "headers", "height", "rowspan", "scope", "valign",
+                                                  "width", NULL};
+static const char *const table_td_attributes[] = {"abbr", "align", "axis", "bgcolor", "char", "charoff",
+                                                  "colspan", "headers", "height", "rowspan", "scope", "valign",
+                                                  "width", NULL};
 
 static int in_list(CuStr name, const char *const *list)
 {
@@ -548,8 +560,8 @@ static void node_to_html_text(Renderer *r, const MarkNode *n)
     }
 }
 
-/* AutoLink.URL and AutoLink.Label: with no protocol both are the value. */
-static CuStr autolink_value(Renderer *r, const MarkNode *n)
+/* AutoLink.Label: the value's text. */
+static CuStr autolink_label(Renderer *r, const MarkNode *n)
 {
     if (n->autolink_value == NULL) return cu_str_empty();
     return leaf_text(r, n->autolink_value);
@@ -558,8 +570,13 @@ static CuStr autolink_value(Renderer *r, const MarkNode *n)
 /* Renderer.renderAutoLink */
 static void render_auto_link(Renderer *r, const MarkNode *n)
 {
-    CuStr url = autolink_value(r, n);
+    CuStr url = mark_autolink_url(r->ctx->arena, n, r->ctx->src, r->ctx->src_len);
+    CuStr label = autolink_label(r, n);
 
+    if (cu_arena_failed(r->ctx->arena)) {
+        r->ctx->failed = 1;
+        return;
+    }
     write_str(r, "<a href=\"");
     if (n->autolink_type == MARK_AUTOLINK_EMAIL && !has_prefix_fold(url, "mailto:")) write_str(r, "mailto:");
     write_url(r, url, 0);
@@ -570,7 +587,7 @@ static void render_auto_link(Renderer *r, const MarkNode *n)
     } else {
         write_str(r, "\">");
     }
-    mark_escape_html(r->w, url);
+    mark_escape_html(r->w, label);
     write_str(r, "</a>");
 }
 
@@ -699,6 +716,253 @@ static void render_string(Renderer *r, const MarkNode *n)
     else writer_write(r, n->value);
 }
 
+/* ---- extension/table.go (TableHTMLRenderer) ---- */
+
+/* TableHTMLRenderer.renderTable */
+static void render_table(Renderer *r, const MarkNode *n, int entering)
+{
+    if (entering) {
+        write_str(r, "<table");
+        if (mark_node_has_attributes(n)) render_attributes(r, n, table_attributes);
+        write_str(r, ">\n");
+    } else {
+        write_str(r, "</table>\n");
+    }
+}
+
+/* TableHTMLRenderer.renderTableHeader */
+static void render_table_header(Renderer *r, const MarkNode *n, int entering)
+{
+    if (entering) {
+        write_str(r, "<thead");
+        if (mark_node_has_attributes(n)) render_attributes(r, n, table_header_attributes);
+        write_str(r, ">\n");
+        write_str(r, "<tr>\n"); /* Header <tr> has no separate handle */
+    } else {
+        write_str(r, "</tr>\n");
+        write_str(r, "</thead>\n");
+        if (n->next != NULL) write_str(r, "<tbody>\n");
+    }
+}
+
+/* TableHTMLRenderer.renderTableRow */
+static void render_table_row(Renderer *r, const MarkNode *n, int entering)
+{
+    if (entering) {
+        write_str(r, "<tr");
+        if (mark_node_has_attributes(n)) render_attributes(r, n, table_row_attributes);
+        write_str(r, ">\n");
+    } else {
+        write_str(r, "</tr>\n");
+        if (n->parent != NULL && n->parent->last == n) write_str(r, "</tbody>\n");
+    }
+}
+
+/* ast.Alignment.String */
+static const char *alignment_string(int a)
+{
+    switch (a) {
+    case MARK_ALIGN_LEFT:
+        return "left";
+    case MARK_ALIGN_RIGHT:
+        return "right";
+    case MARK_ALIGN_CENTER:
+        return "center";
+    case MARK_ALIGN_NONE:
+        return "none";
+    default:
+        return "";
+    }
+}
+
+/* TableHTMLRenderer.renderTableCell. The style method writes the
+ * alignment into the node's style attribute (appended after ';' to one
+ * that is there) before the attributes are rendered. */
+static void render_table_cell(Renderer *r, MarkNode *n, int entering)
+{
+    const char *tag = n->parent != NULL && n->parent->kind == MARK_TABLE_HEADER ? "th" : "td";
+
+    if (!entering) {
+        write_str(r, "</");
+        write_str(r, tag);
+        write_str(r, ">\n");
+        return;
+    }
+    cu_sb_char(r->w, '<');
+    write_str(r, tag);
+    if (n->alignment != MARK_ALIGN_NONE) {
+        CuMarkTableAlign amethod = r->opt == NULL ? CU_MARK_ALIGN_DEFAULT : r->opt->table_align;
+
+        if (amethod == CU_MARK_ALIGN_DEFAULT) amethod = r->xhtml ? CU_MARK_ALIGN_ATTRIBUTE : CU_MARK_ALIGN_STYLE;
+        if (amethod == CU_MARK_ALIGN_ATTRIBUTE) {
+            const MarkAttr *a = mark_node_attribute(n, CU_LIT("align"));
+
+            if (a == NULL || a->value.kind != MARK_ATTR_STRING) { /* Skip align render if overridden */
+                write_str(r, " align=\"");
+                write_str(r, alignment_string(n->alignment));
+                write_str(r, "\"");
+            }
+        } else if (amethod == CU_MARK_ALIGN_STYLE) {
+            const MarkAttr *a = mark_node_attribute(n, CU_LIT("style"));
+            CuBuilder b;
+            CuStr style;
+
+            cu_sb_init(&b, r->ctx->arena);
+            /* a non-string style makes Go's v.([]byte) panic; left as is */
+            if (a != NULL && a->value.kind == MARK_ATTR_STRING) {
+                cu_sb_str(&b, a->value.str);
+                cu_sb_char(&b, ';');
+            }
+            cu_sb_str(&b, CU_LIT("text-align:"));
+            cu_sb_str(&b, cu_str_cstr(alignment_string(n->alignment)));
+            if (!cu_sb_finish(&b, &style)) {
+                r->ctx->failed = 1;
+                return;
+            }
+            mark_node_set_attribute(n, CU_LIT("style"), mark_attr_string(style));
+            if (cu_vec_failed(&n->attrs)) {
+                r->ctx->failed = 1;
+                return;
+            }
+        }
+    }
+    if (mark_node_has_attributes(n)) render_attributes(r, n, tag[1] == 'd' ? table_td_attributes : table_th_attributes);
+    cu_sb_char(r->w, '>');
+}
+
+/* ---- extension/strikethrough.go, tasklist.go ---- */
+
+/* StrikethroughHTMLRenderer.renderStrikethrough */
+static void render_strikethrough(Renderer *r, const MarkNode *n, int entering)
+{
+    if (entering) {
+        if (mark_node_has_attributes(n)) {
+            write_str(r, "<del");
+            render_attributes(r, n, no_attributes);
+            cu_sb_char(r->w, '>');
+        } else {
+            write_str(r, "<del>");
+        }
+    } else {
+        write_str(r, "</del>");
+    }
+}
+
+/* TaskCheckBoxHTMLRenderer.renderTaskCheckBox on entering */
+static void render_task_checkbox(Renderer *r, const MarkNode *n)
+{
+    if (n->is_checked) write_str(r, "<input checked=\"\" disabled=\"\" type=\"checkbox\"");
+    else write_str(r, "<input disabled=\"\" type=\"checkbox\"");
+    if (r->xhtml) write_str(r, " /> ");
+    else write_str(r, "> ");
+}
+
+/* ---- extension/definition_list.go (DefinitionListHTMLRenderer) ---- */
+
+/* DefinitionListHTMLRenderer.renderDefinitionList */
+static void render_definition_list(Renderer *r, const MarkNode *n, int entering)
+{
+    if (entering) {
+        if (mark_node_has_attributes(n)) {
+            write_str(r, "<dl");
+            render_attributes(r, n, no_attributes);
+            write_str(r, ">\n");
+        } else {
+            write_str(r, "<dl>\n");
+        }
+    } else {
+        write_str(r, "</dl>\n");
+    }
+}
+
+/* DefinitionListHTMLRenderer.renderDefinitionTerm */
+static void render_definition_term(Renderer *r, const MarkNode *n, int entering)
+{
+    if (entering) {
+        if (mark_node_has_attributes(n)) {
+            write_str(r, "<dt");
+            render_attributes(r, n, no_attributes);
+            cu_sb_char(r->w, '>');
+        } else {
+            write_str(r, "<dt>");
+        }
+    } else {
+        write_str(r, "</dt>\n");
+    }
+}
+
+/* DefinitionListHTMLRenderer.renderDefinitionDescription */
+static void render_definition_description(Renderer *r, const MarkNode *n, int entering)
+{
+    if (entering) {
+        write_str(r, "<dd");
+        if (mark_node_has_attributes(n)) render_attributes(r, n, no_attributes);
+        if (n->is_tight) write_str(r, ">");
+        else write_str(r, ">\n");
+    } else {
+        write_str(r, "</dd>\n");
+    }
+}
+
+/* ---- extension/footnote.go (FootnoteHTMLRenderer, default config) ---- */
+
+/* FootnoteHTMLRenderer.renderFootnoteLink on entering; IDPrefix is
+ * empty, LinkTitle empty, LinkClass "footnote-ref" (no ^^ or %% to
+ * apply). */
+static void render_footnote_link(Renderer *r, const MarkNode *n)
+{
+    write_str(r, "<sup id=\"fnref");
+    if (n->ref_index > 0) cu_sb_long(r->w, n->ref_index);
+    cu_sb_char(r->w, ':');
+    cu_sb_long(r->w, n->index);
+    write_str(r, "\"><a href=\"#fn:");
+    cu_sb_long(r->w, n->index);
+    write_str(r, "\" class=\"footnote-ref\" role=\"doc-noteref\">");
+    cu_sb_long(r->w, n->index);
+    write_str(r, "</a></sup>");
+}
+
+/* FootnoteHTMLRenderer.renderFootnoteBacklink on entering; BacklinkClass
+ * "footnote-backref", BacklinkHTML "&#x21a9;&#xfe0e;", no title. */
+static void render_footnote_backlink(Renderer *r, const MarkNode *n)
+{
+    write_str(r, "&#160;<a href=\"#fnref");
+    if (n->ref_index > 0) cu_sb_long(r->w, n->ref_index);
+    cu_sb_char(r->w, ':');
+    cu_sb_long(r->w, n->index);
+    write_str(r, "\" class=\"footnote-backref\" role=\"doc-backlink\">&#x21a9;&#xfe0e;</a>");
+}
+
+/* FootnoteHTMLRenderer.renderFootnote */
+static void render_footnote(Renderer *r, const MarkNode *n, int entering)
+{
+    if (entering) {
+        write_str(r, "<li id=\"fn:");
+        cu_sb_long(r->w, n->index);
+        write_str(r, "\"");
+        if (mark_node_has_attributes(n)) render_attributes(r, n, list_item_attributes);
+        write_str(r, ">\n");
+    } else {
+        write_str(r, "</li>\n");
+    }
+}
+
+/* FootnoteHTMLRenderer.renderFootnoteList */
+static void render_footnote_list(Renderer *r, const MarkNode *n, int entering)
+{
+    if (entering) {
+        write_str(r, "<div class=\"footnotes\" role=\"doc-endnotes\"");
+        if (mark_node_has_attributes(n)) render_attributes(r, n, no_attributes);
+        cu_sb_char(r->w, '>');
+        if (r->xhtml) write_str(r, "\n<hr />\n");
+        else write_str(r, "\n<hr>\n");
+        write_str(r, "<ol>\n");
+    } else {
+        write_str(r, "</ol>\n");
+        write_str(r, "</div>\n");
+    }
+}
+
 /* ---- The walk (renderer.Render over ast.Walk) ---- */
 
 /* One renderer call; returns 1 for ast.WalkSkipChildren. */
@@ -767,6 +1031,45 @@ static int render_node(Renderer *r, MarkNode *n, int entering)
         return 0;
     case MARK_STRING:
         if (entering) render_string(r, n);
+        return 0;
+    case MARK_TABLE:
+        render_table(r, n, entering);
+        return 0;
+    case MARK_TABLE_HEADER:
+        render_table_header(r, n, entering);
+        return 0;
+    case MARK_TABLE_ROW:
+        render_table_row(r, n, entering);
+        return 0;
+    case MARK_TABLE_CELL:
+        render_table_cell(r, n, entering);
+        return 0;
+    case MARK_STRIKETHROUGH:
+        render_strikethrough(r, n, entering);
+        return 0;
+    case MARK_TASK_CHECKBOX:
+        if (entering) render_task_checkbox(r, n);
+        return 0;
+    case MARK_DEFINITION_LIST:
+        render_definition_list(r, n, entering);
+        return 0;
+    case MARK_DEFINITION_TERM:
+        render_definition_term(r, n, entering);
+        return 0;
+    case MARK_DEFINITION_DESCRIPTION:
+        render_definition_description(r, n, entering);
+        return 0;
+    case MARK_FOOTNOTE_LINK:
+        if (entering) render_footnote_link(r, n);
+        return 0;
+    case MARK_FOOTNOTE_BACKLINK:
+        if (entering) render_footnote_backlink(r, n);
+        return 0;
+    case MARK_FOOTNOTE:
+        render_footnote(r, n, entering);
+        return 0;
+    case MARK_FOOTNOTE_LIST:
+        render_footnote_list(r, n, entering);
         return 0;
     default:
         /* Delimiter and linkLabelState have no renderer registered. */

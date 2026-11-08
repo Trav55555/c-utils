@@ -18,7 +18,7 @@ static CuStr line_bytes(MarkCtx *ctx, MarkLine line)
 /* ---- Delimiters (parser/delimiter.go, parseContext) ---- */
 
 /* parseContext.PushDelimiter */
-static void push_delimiter(MarkCtx *ctx, MarkNode *d)
+void mark_push_delimiter(MarkCtx *ctx, MarkNode *d)
 {
     if (ctx->delimiters == NULL) {
         ctx->delimiters = d;
@@ -94,9 +94,9 @@ static unsigned long line_rune_at(MarkLine line, long j)
     return mark_to_rune(line.bytes, line.n, j - line.pad);
 }
 
-/* ScanDelimiter with the emphasis processor (IsDelimiter: '*' or '_')
- * and min 1. */
-static MarkNode *scan_delimiter(MarkCtx *ctx, MarkLine line, unsigned long before)
+/* The flag computation of ScanDelimiter: the run of line[0], its left and
+ * right flanking, and the canOpen/canClose rules ('_' is stricter). */
+long mark_scan_delimiter_flags(MarkLine line, unsigned long before, int *can_open, int *can_close)
 {
     long len = mark_line_len(line);
     unsigned char c = mark_line_at(line, 0);
@@ -108,12 +108,9 @@ static MarkNode *scan_delimiter(MarkCtx *ctx, MarkLine line, unsigned long befor
     int after_is_space;
     int is_left;
     int is_right;
-    MarkNode *d;
 
-    if (c != '*' && c != '_') return NULL;
     for (; j < len && c == mark_line_at(line, j); j++) {
     }
-    if (j < 1) return NULL;
     if (j != len) after = line_rune_at(line, j);
     before_is_punct = mark_rune_punct(before);
     before_is_space = mark_rune_space(before);
@@ -121,18 +118,36 @@ static MarkNode *scan_delimiter(MarkCtx *ctx, MarkLine line, unsigned long befor
     after_is_space = mark_rune_space(after);
     is_left = !after_is_space && (!after_is_punct || before_is_space || before_is_punct);
     is_right = !before_is_space && (!before_is_punct || after_is_space || after_is_punct);
+    if (c == '_') {
+        *can_open = is_left && (!is_right || before_is_punct);
+        *can_close = is_right && (!is_left || after_is_punct);
+    } else {
+        *can_open = is_left;
+        *can_close = is_right;
+    }
+    return j;
+}
+
+/* ScanDelimiter with the emphasis processor (IsDelimiter: '*' or '_')
+ * and min 1. */
+static MarkNode *scan_delimiter(MarkCtx *ctx, MarkLine line, unsigned long before)
+{
+    unsigned char c = mark_line_at(line, 0);
+    long j;
+    int can_open;
+    int can_close;
+    MarkNode *d;
+
+    if (c != '*' && c != '_') return NULL;
+    j = mark_scan_delimiter_flags(line, before, &can_open, &can_close);
+    if (j < 1) return NULL;
     d = mark_node_new(ctx->arena, MARK_DELIMITER);
     if (d == NULL) {
         ctx->failed = 1;
         return NULL;
     }
-    if (c == '_') {
-        d->can_open = is_left && (!is_right || before_is_punct);
-        d->can_close = is_right && (!is_left || after_is_punct);
-    } else {
-        d->can_open = is_left;
-        d->can_close = is_right;
-    }
+    d->can_open = can_open;
+    d->can_close = can_close;
     d->length = j;
     d->original_length = j;
     d->delim_char = c;
@@ -177,6 +192,8 @@ void mark_process_delimiters(MarkCtx *ctx, MarkNode *bottom, int bottom_set)
             closer = closer->next_delim;
             continue;
         }
+        /* Both processors' CanOpenCloser compare the characters, so the
+         * processor is implied by the character ('~' is strikethrough). */
         for (opener = closer->prev_delim; opener != NULL && opener != bottom; opener = opener->prev_delim) {
             if (opener->can_open && opener->delim_char == closer->delim_char) {
                 maybe_opener = 1;
@@ -197,7 +214,9 @@ void mark_process_delimiters(MarkCtx *ctx, MarkNode *bottom, int bottom_set)
         consume_characters(opener, consume);
         consume_characters(closer, consume);
 
-        node = mark_node_new(ctx->arena, MARK_EMPHASIS); /* emphasisDelimiterProcessor.OnMatch */
+        /* emphasisDelimiterProcessor.OnMatch, or
+         * strikethroughDelimiterProcessor.OnMatch for '~' */
+        node = mark_node_new(ctx->arena, opener->delim_char == '~' ? MARK_STRIKETHROUGH : MARK_EMPHASIS);
         if (node == NULL) {
             ctx->failed = 1;
             return;
@@ -248,7 +267,7 @@ static MarkNode *emphasis_parse(MarkCtx *ctx, MarkNode *parent, MarkReader *bloc
     if (node == NULL) return NULL;
     node->segment = mark_segment_with_stop(segment, segment.start + node->original_length);
     mark_reader_advance(block, node->original_length);
-    push_delimiter(ctx, node);
+    mark_push_delimiter(ctx, node);
     return node;
 }
 
@@ -1229,28 +1248,44 @@ void mark_link_close_block(MarkCtx *ctx, MarkNode *parent, MarkReader *block)
     }
 }
 
-/* ---- parser.DefaultInlineParsers by trigger ---- */
+/* ---- parser.DefaultInlineParsers and the extensions' by trigger ---- */
 
-size_t mark_inline_parsers_for(unsigned char c, MarkInlineParse out[2])
+typedef struct InlineParserEntry {
+    MarkInlineParse parse;
+    const char *trigger;
+    unsigned long flag; /* the CU_MARK_* option that registers it; 0: core */
+} InlineParserEntry;
+
+/* In priority order: task list 0, code span 100, footnote 101, link 200,
+ * auto link 300, raw HTML 400, emphasis 500, strikethrough 500 (the tie
+ * does not matter: the two share no trigger), linkify 999, typographer
+ * 9999. The linkify trigger ' ' stands for any white space and a line
+ * head, as the driver maps them. */
+static const InlineParserEntry inline_parsers[] = {
+    {mark_task_checkbox_parse, "[", CU_MARK_TASKLIST},
+    {code_span_parse, "`", 0},
+    {mark_footnote_parse, "![", CU_MARK_FOOTNOTE},
+    {link_parse, "![]", 0},
+    {autolink_parse, "<", 0},
+    {raw_html_parse, "<", 0},
+    {emphasis_parse, "*_", 0},
+    {mark_strikethrough_parse, "~", CU_MARK_STRIKETHROUGH},
+    {mark_linkify_parse, " *_~(", CU_MARK_LINKIFY},
+    {mark_typographer_parse, "'\"-.,<>*[", CU_MARK_TYPOGRAPHER},
+};
+
+size_t mark_inline_parsers_for(const MarkCtx *ctx, unsigned char c, MarkInlineParse out[MARK_INLINE_PARSERS_MAX])
 {
-    switch (c) {
-    case '`':
-        out[0] = code_span_parse;
-        return 1;
-    case '!':
-    case '[':
-    case ']':
-        out[0] = link_parse;
-        return 1;
-    case '<':
-        out[0] = autolink_parse;
-        out[1] = raw_html_parse;
-        return 2;
-    case '*':
-    case '_':
-        out[0] = emphasis_parse;
-        return 1;
-    default:
-        return 0;
+    size_t n = 0;
+    size_t i;
+
+    if (c == 0) return 0;
+    for (i = 0; i < sizeof inline_parsers / sizeof inline_parsers[0]; i++) {
+        const InlineParserEntry *e = &inline_parsers[i];
+
+        if (e->flag != 0 && (ctx->flags & e->flag) == 0) continue;
+        if (strchr(e->trigger, (int)c) == NULL) continue;
+        if (n < MARK_INLINE_PARSERS_MAX) out[n++] = e->parse;
     }
+    return n;
 }

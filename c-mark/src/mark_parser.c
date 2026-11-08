@@ -1,6 +1,7 @@
 /* goldmark parser/parser.go as C: the parse context, auto heading ids, the
- * block driver (parseBlocks, openBlocks, closeBlocks) and the inline driver
- * (parseBlock). Each function names the Go function it ports. */
+ * block driver
+ * (parseBlocks, openBlocks, closeBlocks), the inline driver (parseBlock)
+ * and the transformer calls. Each function names the Go function it ports. */
 #include "mark_parser.h"
 #include "mark_util.h"
 
@@ -32,6 +33,11 @@ void mark_ctx_init(MarkCtx *ctx, CuArena *a, CuStr src, unsigned long flags)
     ctx->link_label_state = NULL;
     ctx->link_bottom = NULL;
     ctx->link_bottom_set = 0;
+    ctx->typo_single = 0;
+    ctx->typo_double = 0;
+    CU_VEC_INIT(&ctx->escaped_pipe_cells, a, MarkEscapedCell *);
+    ctx->footnote_list = NULL;
+    CU_VEC_INIT(&ctx->footnote_links, a, MarkNode *);
 }
 
 /* parseContext.LastOpenedBlock */
@@ -69,15 +75,55 @@ const MarkReference *mark_reference(MarkCtx *ctx, CuStr key)
     return CU_MAP_GET(&ctx->refs, MarkReference, key);
 }
 
-/* ids.Generate for ast.KindHeading. Candidates "<id>-<n>" are tried under
- * a temp scope so the ones already taken leave nothing in the arena. */
+/* Tries "<base>-<n>" for n = 1, 2, ... until one is free, which both id
+ * generators do when base is taken (ids.Generate's loop, idFactory's hook).
+ * Candidates are tried under a temp scope so the ones already taken leave
+ * nothing in the arena. The result is registered. */
+static CuStr ids_numbered(MarkCtx *ctx, CuStr base)
+{
+    CuBuilder b;
+    CuStr result;
+    unsigned long n;
+    int one = 1;
+
+    for (n = 1;; n++) {
+        CuTemp t = cu_temp_begin(ctx->arena);
+        CuBuilder cb;
+        CuStr cand;
+        int taken;
+
+        cu_sb_init(&cb, ctx->arena);
+        cu_sb_str(&cb, base);
+        cu_sb_char(&cb, '-');
+        cu_sb_ulong(&cb, n);
+        if (!cu_sb_finish(&cb, &cand)) {
+            cu_temp_end(t);
+            ctx->failed = 1;
+            return cu_str_empty();
+        }
+        taken = CU_MAP_GET(&ctx->ids, int, cand) != NULL;
+        cu_temp_end(t);
+        if (!taken) break;
+    }
+    cu_sb_init(&b, ctx->arena);
+    cu_sb_str(&b, base);
+    cu_sb_char(&b, '-');
+    cu_sb_ulong(&b, n);
+    if (!cu_sb_finish(&b, &result)) {
+        ctx->failed = 1;
+        return cu_str_empty();
+    }
+    if (CU_MAP_UPSERT(&ctx->ids, int, result, &one) == NULL) ctx->failed = 1;
+    return result;
+}
+
+/* ids.Generate for ast.KindHeading. */
 CuStr mark_ids_generate(MarkCtx *ctx, CuStr value)
 {
     CuBuilder b;
     CuStr result;
     const unsigned char *s;
     size_t i;
-    unsigned long n;
     int one = 1;
 
     value = mark_trim_spaces(value);
@@ -101,37 +147,7 @@ CuStr mark_ids_generate(MarkCtx *ctx, CuStr value)
         ctx->failed = 1;
         return cu_str_empty();
     }
-    if (CU_MAP_GET(&ctx->ids, int, result) == NULL) {
-        if (CU_MAP_UPSERT(&ctx->ids, int, result, &one) == NULL) ctx->failed = 1;
-        return result;
-    }
-    for (n = 1;; n++) {
-        CuTemp t = cu_temp_begin(ctx->arena);
-        CuBuilder cb;
-        CuStr cand;
-        int taken;
-
-        cu_sb_init(&cb, ctx->arena);
-        cu_sb_str(&cb, result);
-        cu_sb_char(&cb, '-');
-        cu_sb_ulong(&cb, n);
-        if (!cu_sb_finish(&cb, &cand)) {
-            cu_temp_end(t);
-            ctx->failed = 1;
-            return cu_str_empty();
-        }
-        taken = CU_MAP_GET(&ctx->ids, int, cand) != NULL;
-        cu_temp_end(t);
-        if (!taken) break;
-    }
-    cu_sb_init(&b, ctx->arena);
-    cu_sb_str(&b, result);
-    cu_sb_char(&b, '-');
-    cu_sb_ulong(&b, n);
-    if (!cu_sb_finish(&b, &result)) {
-        ctx->failed = 1;
-        return cu_str_empty();
-    }
+    if (CU_MAP_GET(&ctx->ids, int, result) != NULL) return ids_numbered(ctx, result);
     if (CU_MAP_UPSERT(&ctx->ids, int, result, &one) == NULL) ctx->failed = 1;
     return result;
 }
@@ -174,10 +190,18 @@ void mark_lines_truncate(CuVec *lines, size_t n)
 
 /* ---- Block parser dispatch (parser.addBlockParser) ---- */
 
+/* Whether the parser is registered under ctx->flags. */
+static int block_parser_enabled(const MarkCtx *ctx, int id)
+{
+    unsigned long flag = mark_block_parsers[id].flag;
+
+    return flag == 0 || (ctx->flags & flag) != 0;
+}
+
 /* The parsers for a line starting with c: those whose trigger contains c,
  * in priority order, then the trigger-less ones, as Go appends
  * freeBlockParsers after each trigger's list. */
-static size_t block_parsers_for(unsigned char c, MarkBlockParserId out[MARK_BP_COUNT])
+static size_t block_parsers_for(const MarkCtx *ctx, unsigned char c, MarkBlockParserId out[MARK_BP_COUNT])
 {
     size_t n = 0;
     int id;
@@ -185,10 +209,11 @@ static size_t block_parsers_for(unsigned char c, MarkBlockParserId out[MARK_BP_C
     for (id = 0; id < MARK_BP_COUNT; id++) {
         const char *t = mark_block_parsers[id].trigger;
 
+        if (!block_parser_enabled(ctx, id)) continue;
         if (t != NULL && c != 0 && strchr(t, (int)c) != NULL) out[n++] = (MarkBlockParserId)id;
     }
     for (id = 0; id < MARK_BP_COUNT; id++) {
-        if (mark_block_parsers[id].trigger == NULL) out[n++] = (MarkBlockParserId)id;
+        if (block_parser_enabled(ctx, id) && mark_block_parsers[id].trigger == NULL) out[n++] = (MarkBlockParserId)id;
     }
     return n;
 }
@@ -232,11 +257,18 @@ static void blocks_push(MarkCtx *ctx, MarkNode *node, MarkBlockParserId parser)
     if (cu_vec_failed(&ctx->opened)) ctx->failed = 1;
 }
 
-/* parser.transformParagraph: 1 when the paragraph was replaced. */
+/* parser.transformParagraph: the transformers in priority order
+ * (LinkReferenceParagraphTransformer 100, the table's 200) until one
+ * removes the paragraph; 1 when it was removed. */
 static int transform_paragraph(MarkCtx *ctx, MarkNode *node, MarkReader *r)
 {
     mark_link_reference_transform(ctx, node, r);
-    return node->parent == NULL;
+    if (node->parent == NULL) return 1;
+    if (ctx->flags & CU_MARK_TABLE) {
+        mark_table_transform(ctx, node, r);
+        if (node->parent == NULL) return 1;
+    }
+    return 0;
 }
 
 /* parser.closeBlocks */
@@ -289,7 +321,7 @@ retry:
             ctx->block_indent = w;
         }
         if (!line.valid || mark_line_at(line, 0) == '\n') goto continuable_check;
-        nbps = block_parsers_for(pos < len ? mark_line_at(line, pos) : 0, bps);
+        nbps = block_parsers_for(ctx, pos < len ? mark_line_at(line, pos) : 0, bps);
         for (k = 0; k < nbps; k++) {
             const MarkBlockParser *bp = &mark_block_parsers[bps[k]];
             MarkNode *last;
@@ -551,11 +583,11 @@ static void parse_block(MarkCtx *ctx, MarkReader *block, MarkNode *parent)
              * still triggers; Go: isSpace && !(escaped && p.escapedSpace) */
             if ((is_punct && !escaped) || is_space || i == 0) {
                 unsigned char parser_char = c;
-                MarkInlineParse ips[2];
+                MarkInlineParse ips[MARK_INLINE_PARSERS_MAX];
                 size_t nips;
 
                 if (is_space || (i == 0 && !is_punct)) parser_char = ' ';
-                nips = mark_inline_parsers_for(parser_char, ips);
+                nips = mark_inline_parsers_for(ctx, parser_char, ips);
                 if (nips != 0) {
                     long saved_line;
                     MarkSegment saved_position;
@@ -619,11 +651,16 @@ static void parse_block(MarkCtx *ctx, MarkReader *block, MarkNode *parent)
     }
 
     mark_process_delimiters(ctx, NULL, 0);
+    /* The closeBlockers: only linkParser. The extensions' CloseBlock
+     * methods take two arguments, not CloseBlocker's three, so goldmark
+     * never calls them; in particular the typographer's quote counter is
+     * never reset and carries across blocks (spec case 91 under Hugo). */
     mark_link_close_block(ctx, parent, block);
 }
 
 /* parser.Parse: blocks, then every block's inlines in post-order
- * (parser.walkBlock, iterative here), with no AST transformers. */
+ * (parser.walkBlock, iterative here), then the AST transformers in
+ * priority order (the table's at 0, the footnote's at 999). */
 MarkNode *mark_parse(MarkCtx *ctx)
 {
     MarkReader reader;
@@ -653,5 +690,8 @@ MarkNode *mark_parse(MarkCtx *ctx)
             n = n->parent;
         }
     }
+    if (ctx->flags & CU_MARK_TABLE) mark_table_ast_transform(ctx, root);
+    if (ctx->flags & CU_MARK_FOOTNOTE) mark_footnote_ast_transform(ctx, root);
+    if (ctx->failed || ctx->limit) return NULL;
     return root;
 }

@@ -1,5 +1,6 @@
-/* goldmark ast/ast.go, ast/block.go and ast/inline.go as C. Each function
- * names the Go function it ports. */
+/* goldmark ast/ast.go, ast/block.go, ast/inline.go and the node
+ * constructors of extension/ast as C. Each function names the Go function
+ * it ports. */
 #include "mark_ast.h"
 #include "mark_util.h"
 
@@ -36,6 +37,7 @@ MarkNode *mark_node_new(CuArena *a, MarkKind kind)
     n->has_title = 0;
     n->autolink_type = 0;
     n->autolink_value = NULL;
+    n->protocol = cu_str_empty();
     n->segments = NULL;
     n->can_open = 0;
     n->can_close = 0;
@@ -49,6 +51,15 @@ MarkNode *mark_node_new(CuArena *a, MarkKind kind)
     n->ll_next = NULL;
     n->ll_first = NULL;
     n->ll_last = NULL;
+    n->alignments = NULL;
+    n->alignment = kind == MARK_TABLE_CELL ? MARK_ALIGN_NONE : 0; /* ast.NewTableCell */
+    n->is_checked = 0;
+    n->temporary_paragraph = NULL;
+    n->ref = cu_str_empty();
+    n->index = kind == MARK_FOOTNOTE ? -1 : 0; /* ast.NewFootnote */
+    n->ref_count = 0;
+    n->ref_index = 0;
+    n->count = 0;
     return n;
 }
 
@@ -331,4 +342,55 @@ long mark_node_depth(const MarkNode *n)
 
     for (n = n->parent; n != NULL; n = n->parent) d++;
     return d;
+}
+
+/* BaseNode.SortChildren, an insertion sort over the sibling links, with
+ * footnoteASTTransformer.Transform's comparator: -1 when n1.Index <
+ * n2.Index, else 1. */
+void mark_node_sort_children_by_index(MarkNode *n)
+{
+    MarkNode *sorted = NULL;
+    MarkNode *current = n->first;
+    MarkNode *c;
+
+    while (current != NULL) {
+        MarkNode *next = current->next;
+
+        if (sorted == NULL || !(sorted->index < current->index)) {
+            current->next = sorted;
+            if (sorted != NULL) sorted->prev = current;
+            sorted = current;
+            sorted->prev = NULL;
+        } else {
+            c = sorted;
+            while (c->next != NULL && c->next->index < current->index) c = c->next;
+            current->next = c->next;
+            current->prev = c;
+            if (c->next != NULL) c->next->prev = current;
+            c->next = current;
+        }
+        current = next;
+    }
+    n->first = sorted;
+    for (c = n->first; c != NULL; c = c->next) n->last = c;
+}
+
+/* AutoLink.URL */
+CuStr mark_autolink_url(CuArena *a, const MarkNode *n, const unsigned char *src, long len)
+{
+    MarkLine v;
+    CuStr value;
+    CuBuilder b;
+    CuStr out;
+
+    if (n->autolink_value == NULL) return cu_str_empty();
+    v = mark_segment_value(n->autolink_value->segment, src, len);
+    value = mark_line_slice(a, v, 0, mark_line_len(v));
+    if (n->protocol.len == 0) return value;
+    cu_sb_init(&b, a);
+    cu_sb_str(&b, n->protocol);
+    cu_sb_str(&b, CU_LIT("://"));
+    cu_sb_str(&b, value);
+    if (!cu_sb_finish(&b, &out)) return cu_str_empty();
+    return out;
 }
