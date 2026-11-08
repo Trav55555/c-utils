@@ -22,8 +22,10 @@ void mark_ctx_init(MarkCtx *ctx, CuArena *a, CuStr src, unsigned long flags)
         ctx->src_cap = ctx->src_len;
         ctx->failed = 1;
     } else {
+        size_t i;
+
         if (src.len > 0) memcpy(copy, src.ptr, src.len);
-        memset(copy + src.len, 0, MARK_SRC_SLACK);
+        for (i = 0; i < MARK_SRC_SLACK; i++) copy[src.len + i] = 0; /* the zeros Go reads */
         ctx->src = copy;
         ctx->src_cap = ctx->src_len + MARK_SRC_SLACK;
     }
