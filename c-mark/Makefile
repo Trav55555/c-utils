@@ -8,9 +8,18 @@ MARKSRC := $(wildcard src/*.c)
 MARKHDR := $(wildcard include/*.h) $(wildcard src/*.h)
 ORACLE := $(BUILD)/oracle
 
-.PHONY: test report check corpus
-test: $(BUILD)/test_corpus
+.PHONY: test test-core report check corpus
+test: $(BUILD)/test_mark $(BUILD)/test_corpus
+	$(BUILD)/test_mark
 	$(BUILD)/test_corpus tests/corpus.json
+
+# What the core port covers: the targeted tests and the corpus suites that
+# need no extension (the runner exits 1 on any failure in a selected suite).
+test-core: $(BUILD)/test_mark $(BUILD)/test_corpus
+	$(BUILD)/test_mark
+	$(BUILD)/test_corpus tests/corpus.json --suite spec
+	$(BUILD)/test_corpus tests/corpus.json --suite extra
+	$(BUILD)/test_corpus tests/corpus.json --suite options
 
 # Progress while porting: every suite's count, exit 0.
 report: $(BUILD)/test_corpus
