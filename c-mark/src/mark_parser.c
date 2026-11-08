@@ -86,12 +86,11 @@ static CuStr ids_numbered(MarkCtx *ctx, CuStr base)
     CuStr result;
     unsigned long n;
     int one = 1;
+    CuTemp t = cu_temp_begin(ctx->arena);
 
     for (n = 1;; n++) {
-        CuTemp t = cu_temp_begin(ctx->arena);
         CuBuilder cb;
         CuStr cand;
-        int taken;
 
         cu_sb_init(&cb, ctx->arena);
         cu_sb_str(&cb, base);
@@ -102,10 +101,9 @@ static CuStr ids_numbered(MarkCtx *ctx, CuStr base)
             ctx->failed = 1;
             return cu_str_empty();
         }
-        taken = CU_MAP_GET(&ctx->ids, int, cand) != NULL;
-        cu_temp_end(t);
-        if (!taken) break;
+        if (CU_MAP_GET(&ctx->ids, int, cand) == NULL) break;
     }
+    cu_temp_end(t);
     cu_sb_init(&b, ctx->arena);
     cu_sb_str(&b, base);
     cu_sb_char(&b, '-');

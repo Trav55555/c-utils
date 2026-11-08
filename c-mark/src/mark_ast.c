@@ -3,6 +3,7 @@
  * it ports. */
 #include "mark_ast.h"
 #include "mark_util.h"
+#include <stdlib.h>
 
 MarkNode *mark_node_new(CuArena *a, MarkKind kind)
 {
@@ -174,9 +175,10 @@ void mark_node_insert_after(MarkNode *n, MarkNode *v1, MarkNode *insertee)
     mark_node_insert_before(n, v1->next, insertee);
 }
 
-/* BaseNode.ReplaceChild */
+/* BaseNode.ReplaceChild. v1 is a node: Go's RemoveChild panics on nil. */
 void mark_node_replace_child(MarkNode *n, MarkNode *v1, MarkNode *insertee)
 {
+    if (v1 == NULL) abort();
     mark_node_insert_before(n, v1, insertee);
     mark_node_remove_child(n, v1);
 }
