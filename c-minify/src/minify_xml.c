@@ -12,9 +12,8 @@ typedef struct MinXmlToken {
     MinBytes attr_val;
 } MinXmlToken;
 
+/* No pointer to the context or the lexer is kept, as in html's buffer. */
 typedef struct MinXmlTokens {
-    MinCtx *ctx;
-    MinXmlLexer *l;
     MinXmlToken *buf;
     size_t len;
     size_t cap;
@@ -22,10 +21,8 @@ typedef struct MinXmlTokens {
     MinXmlToken error_tok;
 } MinXmlTokens;
 
-static int tokens_init(MinXmlTokens *tb, MinCtx *ctx, MinXmlLexer *l)
+static int tokens_init(MinXmlTokens *tb, MinCtx *ctx)
 {
-    tb->ctx = ctx;
-    tb->l = l;
     tb->cap = 8;
     tb->buf = CU_PUSH(ctx->a, MinXmlToken, tb->cap);
     tb->len = 0;
@@ -42,65 +39,62 @@ static int tokens_init(MinXmlTokens *tb, MinCtx *ctx, MinXmlLexer *l)
 }
 
 /* TokenBuffer.read */
-static void tokens_read(MinXmlTokens *tb, MinXmlToken *t)
+static void tokens_read(MinXmlLexer *l, MinXmlToken *t)
 {
-    t->type = min_xml_lex_next(tb->l, &t->data);
-    t->text = tb->l->text;
-    t->attr_val = t->type == MX_ATTRIBUTE_TOKEN ? tb->l->attr_val : min_bytes_nil();
+    t->type = min_xml_lex_next(l, &t->data);
+    t->text = l->text;
+    t->attr_val = t->type == MX_ATTRIBUTE_TOKEN ? l->attr_val : min_bytes_nil();
 }
 
 /* TokenBuffer.Peek, as html/buffer.go's. */
-static MinXmlToken *tokens_peek(MinXmlTokens *tb, size_t pos)
+static MinXmlToken *tokens_peek(MinXmlTokens *tb, MinCtx *ctx, MinXmlLexer *l, size_t pos)
 {
-    if (tb->ctx->failed) return &tb->error_tok;
+    if (ctx->failed) return &tb->error_tok;
     pos += tb->pos;
     if (pos >= tb->len) {
-        size_t c = tb->cap;
         size_t d = tb->len - tb->pos;
         size_t p = pos - tb->pos + 1;
-        MinXmlToken *buf;
         size_t i;
 
         if (tb->len > 0 && tb->buf[tb->len - 1].type == MX_ERROR_TOKEN) return &tb->buf[tb->len - 1];
-        if (2 * p > c) {
-            size_t ncap = 2 * c + p;
+        if (2 * p > tb->cap) {
+            size_t ncap = 2 * tb->cap + p;
+            MinXmlToken *fresh = CU_PUSH(ctx->a, MinXmlToken, ncap);
 
-            buf = CU_PUSH(tb->ctx->a, MinXmlToken, ncap);
-            if (buf == NULL) {
-                tb->ctx->failed = 1;
+            if (fresh == NULL) {
+                ctx->failed = 1;
                 return &tb->error_tok;
             }
-            if (d > 0) memcpy(buf, tb->buf + tb->pos, d * sizeof *buf);
+            if (d > 0) memcpy(fresh, tb->buf + tb->pos, d * sizeof *fresh);
+            tb->buf = fresh;
             tb->cap = ncap;
-        } else {
-            buf = tb->buf;
-            if (d > 0) memmove(buf, tb->buf + tb->pos, d * sizeof *buf);
+        } else if (d > 0) {
+            memmove(tb->buf, tb->buf + tb->pos, d * sizeof *tb->buf);
         }
         tb->len = p;
         pos -= tb->pos;
+        tb->pos = 0;
         for (i = d; i < p; i++) {
-            tokens_read(tb, &buf[i]);
-            if (buf[i].type == MX_ERROR_TOKEN) {
+            tokens_read(l, &tb->buf[i]);
+            if (tb->buf[i].type == MX_ERROR_TOKEN) {
                 tb->len = i + 1;
                 pos = i;
                 break;
             }
         }
-        tb->pos = 0;
-        tb->buf = buf;
     }
     return &tb->buf[pos];
 }
 
 /* TokenBuffer.Shift */
-static MinXmlToken *tokens_shift(MinXmlTokens *tb)
+static MinXmlToken *tokens_shift(MinXmlTokens *tb, MinCtx *ctx, MinXmlLexer *l)
 {
     MinXmlToken *t;
 
-    if (tb->ctx->failed) return &tb->error_tok;
+    if (ctx->failed) return &tb->error_tok;
     if (tb->pos >= tb->len) {
         t = &tb->buf[0];
-        tokens_read(tb, t);
+        tokens_read(l, t);
         return t;
     }
     t = &tb->buf[tb->pos];
@@ -244,20 +238,24 @@ static int escape_cdata_val(MinCtx *ctx, MinBytes b, MinBytes *out)
 /* ---- xml.go ------------------------------------------------------------ */
 
 /* Minifier.Minify */
-int minify_xml(MinCtx *ctx, MinBytes src, CuBuilder *out)
+int minify_xml(MinCtx *ctx, CuStr src, CuBuilder *out)
 {
-    MinInput input;
-    MinXmlLexer lexer;
-    MinXmlTokens tb;
-    MinXmlLexer *l = &lexer;
+    MinBytes buf;
+    MinInput *input = CU_PUSH(ctx->a, MinInput, 1);
+    MinXmlLexer *l = CU_PUSH(ctx->a, MinXmlLexer, 1);
+    MinXmlTokens *tb = CU_PUSH(ctx->a, MinXmlTokens, 1);
     int keep_whitespace = (ctx->flags & CU_MINIFY_KEEP_WHITESPACE) != 0;
     int omit_space = 1; /* on true the next text token must not start with a space */
 
-    min_input_init(&input, src.ptr, src.len);
-    min_xml_lex_init(l, &input);
-    if (!tokens_init(&tb, ctx, l)) return 0;
+    if (input == NULL || l == NULL || tb == NULL || !min_copy_input(ctx->a, src, &buf, &ctx->failed)) {
+        ctx->failed = 1;
+        return 0;
+    }
+    min_input_init(input, buf.ptr, buf.len);
+    min_xml_lex_init(l, input);
+    if (!tokens_init(tb, ctx)) return 0;
     for (;;) {
-        MinXmlToken t = *tokens_shift(&tb);
+        MinXmlToken t = *tokens_shift(tb, ctx, l);
 
         if (ctx->failed) return 0;
         if (t.type == MX_CDATA_TOKEN) {
@@ -299,7 +297,7 @@ int minify_xml(MinCtx *ctx, MinBytes src, CuBuilder *out)
 
                 omit_space = 1;
                 for (;;) {
-                    const MinXmlToken *next = tokens_peek(&tb, i);
+                    const MinXmlToken *next = tokens_peek(tb, ctx, l, i);
 
                     /* trim if EOF, text token with whitespace begin or block token */
                     if (next->type == MX_ERROR_TOKEN) {
@@ -356,17 +354,17 @@ int minify_xml(MinCtx *ctx, MinBytes src, CuBuilder *out)
             }
             break;
         case MX_START_TAG_CLOSE_TOKEN: {
-            const MinXmlToken *next = tokens_peek(&tb, 0);
+            const MinXmlToken *next = tokens_peek(tb, ctx, l, 0);
             int skip_extra = 0;
 
             if (next->type == MX_TEXT_TOKEN && min_is_all_whitespace(next->data)) {
-                next = tokens_peek(&tb, 1);
+                next = tokens_peek(tb, ctx, l, 1);
                 skip_extra = 1;
             }
             if (next->type == MX_END_TAG_TOKEN) {
                 /* collapse empty tags to single void tag */
-                tokens_shift(&tb);
-                if (skip_extra) tokens_shift(&tb);
+                tokens_shift(tb, ctx, l);
+                if (skip_extra) tokens_shift(tb, ctx, l);
                 cu_sb_str(out, cu_str_cstr("/>"));
             } else {
                 w(out, t.data);

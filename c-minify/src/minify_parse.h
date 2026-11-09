@@ -115,8 +115,13 @@ typedef struct MinBuf {
     size_t cap;
 } MinBuf;
 
-/* Room for n bytes in buf, growing it in a; NULL and *failed set on failure. */
+/* Room for n bytes in buf, growing it in a; NULL and *failed set on failure.
+ * The old bytes are not kept: every use fills the buffer afresh. */
 unsigned char *min_buf_reserve(MinBuf *buf, CuArena *a, size_t n, int *failed);
+
+/* parse.NewInput's buffer: a copy of src in a followed by one NUL, mutable.
+ * Returns 1, or 0 with *failed set. */
+int min_copy_input(CuArena *a, CuStr src, MinBytes *out, int *failed);
 
 /* The state one top-level cu_minify call shares with the nested calls it
  * makes: the arena, the options, the nesting depth, and the sticky
@@ -134,8 +139,8 @@ typedef struct MinCtx {
 
 /* The ported minifiers over a copy of src made in ctx->a, writing to out;
  * each returns 0 and marks ctx when it cannot finish. */
-int minify_html(MinCtx *ctx, MinBytes src, CuBuilder *out);
-int minify_xml(MinCtx *ctx, MinBytes src, CuBuilder *out);
+int minify_html(MinCtx *ctx, CuStr src, CuBuilder *out);
+int minify_xml(MinCtx *ctx, CuStr src, CuBuilder *out);
 
 /* minify.M.MinifyMimetype under Hugo's minifier set: minifies data as
  * mimetype into out and returns 1, or returns 0 for ErrNotExist (the

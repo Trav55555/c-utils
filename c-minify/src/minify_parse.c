@@ -1060,7 +1060,9 @@ unsigned char *min_buf_reserve(MinBuf *buf, CuArena *a, size_t n, int *failed)
         }
         cap *= 2;
     }
-    p = (unsigned char *)cu_arena_grow(a, buf->ptr, buf->cap, cap);
+    /* A fresh push rather than cu_arena_grow: the doubling bounds what the
+     * abandoned buffers add up to, and the arena's scope frees them all. */
+    p = (unsigned char *)cu_arena_push_bytes(a, cap);
     if (p == NULL) {
         *failed = 1;
         return NULL;
@@ -1068,4 +1070,18 @@ unsigned char *min_buf_reserve(MinBuf *buf, CuArena *a, size_t n, int *failed)
     buf->ptr = p;
     buf->cap = cap;
     return p;
+}
+
+int min_copy_input(CuArena *a, CuStr src, MinBytes *out, int *failed)
+{
+    unsigned char *p = (unsigned char *)cu_arena_push_bytes(a, src.len + 1);
+
+    if (p == NULL) {
+        *failed = 1;
+        return 0;
+    }
+    if (src.len > 0) memcpy(p, src.ptr, src.len);
+    p[src.len] = 0;
+    *out = min_bytes(p, src.len);
+    return 1;
 }

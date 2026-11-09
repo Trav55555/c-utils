@@ -17,16 +17,18 @@ typedef struct MinHtmlToken {
     unsigned traits;
 } MinHtmlToken;
 
-/* buffer.go TokenBuffer: tokens read ahead of the one being minified. */
+/* buffer.go TokenBuffer: tokens read ahead of the one being minified. It
+ * holds no pointer to the context or the lexer; both are passed to each
+ * call, so the arena-allocated tokens never hold a view of this frame. */
 typedef struct MinHtmlTokens {
-    MinCtx *ctx;
-    MinHtmlLexer *l;
     MinHtmlToken *buf;
     size_t len;
     size_t cap;
     size_t pos;
     MinHtmlToken error_tok; /* what Peek and Shift hand out after an allocation failed */
 } MinHtmlTokens;
+
+#define NO_ATTR ((size_t)-1)
 
 static void token_clear(MinHtmlToken *t)
 {
@@ -38,10 +40,8 @@ static void token_clear(MinHtmlToken *t)
     t->traits = 0;
 }
 
-static int tokens_init(MinHtmlTokens *tb, MinCtx *ctx, MinHtmlLexer *l)
+static int tokens_init(MinHtmlTokens *tb, MinCtx *ctx)
 {
-    tb->ctx = ctx;
-    tb->l = l;
     tb->cap = 8;
     tb->buf = CU_PUSH(ctx->a, MinHtmlToken, tb->cap);
     tb->len = 0;
@@ -55,12 +55,12 @@ static int tokens_init(MinHtmlTokens *tb, MinCtx *ctx, MinHtmlLexer *l)
 }
 
 /* TokenBuffer.read */
-static void tokens_read(MinHtmlTokens *tb, MinHtmlToken *t)
+static void tokens_read(MinHtmlLexer *l, MinHtmlToken *t)
 {
-    t->type = min_html_lex_next(tb->l, &t->data);
-    t->text = tb->l->text;
+    t->type = min_html_lex_next(l, &t->data);
+    t->text = l->text;
     if (t->type == MH_ATTRIBUTE_TOKEN) {
-        t->attr_val = tb->l->attr_val;
+        t->attr_val = l->attr_val;
         if (t->attr_val.len > 1 && (t->attr_val.ptr[0] == '"' || t->attr_val.ptr[0] == '\'')) {
             /* quotes will be readded in attribute loop if necessary */
             t->attr_val = min_slice(t->attr_val, 1, t->attr_val.len - 1);
@@ -80,57 +80,55 @@ static void tokens_read(MinHtmlTokens *tb, MinHtmlToken *t)
 
 /* TokenBuffer.Peek: the token pos ahead, reading and keeping the ones
  * before it. Past an error token it returns that token. */
-static MinHtmlToken *tokens_peek(MinHtmlTokens *tb, size_t pos)
+static MinHtmlToken *tokens_peek(MinHtmlTokens *tb, MinCtx *ctx, MinHtmlLexer *l, size_t pos)
 {
-    if (tb->ctx->failed) return &tb->error_tok;
+    if (ctx->failed) return &tb->error_tok;
     pos += tb->pos;
     if (pos >= tb->len) {
-        size_t c = tb->cap;
         size_t d = tb->len - tb->pos;
         size_t p = pos - tb->pos + 1; /* required peek length */
-        MinHtmlToken *buf;
         size_t i;
 
         if (tb->len > 0 && tb->buf[tb->len - 1].type == MH_ERROR_TOKEN) return &tb->buf[tb->len - 1];
-        if (2 * p > c) {
-            size_t ncap = 2 * c + p;
+        /* Go moves the kept tokens to the front of the old or a new buffer. */
+        if (2 * p > tb->cap) {
+            size_t ncap = 2 * tb->cap + p;
+            MinHtmlToken *fresh = CU_PUSH(ctx->a, MinHtmlToken, ncap);
 
-            buf = CU_PUSH(tb->ctx->a, MinHtmlToken, ncap);
-            if (buf == NULL) {
-                tb->ctx->failed = 1;
+            if (fresh == NULL) {
+                ctx->failed = 1;
                 return &tb->error_tok;
             }
-            if (d > 0) memcpy(buf, tb->buf + tb->pos, d * sizeof *buf);
+            if (d > 0) memcpy(fresh, tb->buf + tb->pos, d * sizeof *fresh);
+            tb->buf = fresh;
             tb->cap = ncap;
-        } else {
-            buf = tb->buf;
-            if (d > 0) memmove(buf, tb->buf + tb->pos, d * sizeof *buf);
+        } else if (d > 0) {
+            memmove(tb->buf, tb->buf + tb->pos, d * sizeof *tb->buf);
         }
         tb->len = p;
         pos -= tb->pos;
+        tb->pos = 0;
         for (i = d; i < p; i++) {
-            tokens_read(tb, &buf[i]);
-            if (buf[i].type == MH_ERROR_TOKEN) {
+            tokens_read(l, &tb->buf[i]);
+            if (tb->buf[i].type == MH_ERROR_TOKEN) {
                 tb->len = i + 1;
                 pos = i;
                 break;
             }
         }
-        tb->pos = 0;
-        tb->buf = buf;
     }
     return &tb->buf[pos];
 }
 
 /* TokenBuffer.Shift */
-static MinHtmlToken *tokens_shift(MinHtmlTokens *tb)
+static MinHtmlToken *tokens_shift(MinHtmlTokens *tb, MinCtx *ctx, MinHtmlLexer *l)
 {
     MinHtmlToken *t;
 
-    if (tb->ctx->failed) return &tb->error_tok;
+    if (ctx->failed) return &tb->error_tok;
     if (tb->pos >= tb->len) {
         t = &tb->buf[0];
-        tokens_read(tb, t);
+        tokens_read(l, t);
         return t;
     }
     t = &tb->buf[tb->pos];
@@ -138,24 +136,23 @@ static MinHtmlToken *tokens_shift(MinHtmlTokens *tb)
     return t;
 }
 
-/* TokenBuffer.Attributes: for each hash, the last attribute token of the
- * current tag with that hash, or NULL. */
-static void tokens_attributes(MinHtmlTokens *tb, const unsigned long *hashes, size_t nhashes, MinHtmlToken **out)
+/* TokenBuffer.Attributes: for each hash, the index in tb->buf of the last
+ * attribute token of the current tag with that hash, or NO_ATTR. */
+static void tokens_attributes(MinHtmlTokens *tb, MinCtx *ctx, MinHtmlLexer *l, const unsigned long *hashes,
+                              size_t nhashes, size_t *idx)
 {
     size_t n = 0;
     size_t i;
     size_t j;
 
     for (;;) {
-        if (tokens_peek(tb, n)->type != MH_ATTRIBUTE_TOKEN) break;
+        if (tokens_peek(tb, ctx, l, n)->type != MH_ATTRIBUTE_TOKEN) break;
         n++;
     }
-    for (j = 0; j < nhashes; j++) out[j] = NULL;
+    for (j = 0; j < nhashes; j++) idx[j] = NO_ATTR;
     for (i = tb->pos; i < tb->pos + n; i++) {
-        MinHtmlToken *attr = &tb->buf[i];
-
         for (j = 0; j < nhashes; j++) {
-            if (hashes[j] == attr->hash) out[j] = attr;
+            if (hashes[j] == tb->buf[i].hash) idx[j] = i;
         }
     }
 }
@@ -216,32 +213,23 @@ int cu_minify_type_for(CuStr mediatype, CuMinifyType *out)
 
 /* Copies b into a NUL-terminated buffer, as a nested parse.NewInput does
  * for the embedded bytes. */
+/* parse.Copy, with the NUL a nested parse.NewInput would add. */
 static int copy_input(MinCtx *ctx, MinBytes b, MinBytes *out)
 {
-    unsigned char *p = (unsigned char *)cu_arena_push_bytes(ctx->a, b.len + 1);
-
-    if (p == NULL) {
-        ctx->failed = 1;
-        return 0;
-    }
-    if (b.len > 0) memcpy(p, b.ptr, b.len);
-    p[b.len] = 0;
-    *out = min_bytes(p, b.len);
-    return 1;
+    return min_copy_input(ctx->a, min_as_str(b), out, &ctx->failed);
 }
 
+/* A nested Minify on the embedded bytes; the callee copies them. */
 static int nested(MinCtx *ctx, MinSlot slot, MinBytes data, CuBuilder *out)
 {
-    MinBytes copy;
     int ok;
 
     if (ctx->depth >= CU_MINIFY_MAX_DEPTH) {
         ctx->limit = 1;
         return 0;
     }
-    if (!copy_input(ctx, data, &copy)) return 0;
     ctx->depth++;
-    ok = slot == SLOT_HTML ? minify_html(ctx, copy, out) : minify_xml(ctx, copy, out);
+    ok = slot == SLOT_HTML ? minify_html(ctx, min_as_str(data), out) : minify_xml(ctx, min_as_str(data), out);
     ctx->depth--;
     return ok;
 }
@@ -487,9 +475,9 @@ static MinBytes replace_all(MinBytes b, const char *old, const char *new_)
 }
 
 /* html.go: the viewport content rewrite inside the Meta branch. */
-static void minify_viewport(MinCtx *ctx, MinHtmlToken *content)
+static MinBytes minify_viewport(MinCtx *ctx, MinBytes content)
 {
-    MinBytes v = replace_all(content->attr_val, " ", "");
+    MinBytes v = replace_all(content, " ", "");
     size_t i;
 
     for (i = 0; i < v.len; i++) {
@@ -510,26 +498,32 @@ static void minify_viewport(MinCtx *ctx, MinHtmlToken *content)
             i--; /* mitigate for-loop increase */
         }
     }
-    content->attr_val = v;
+    return v;
 }
 
-/* Minifier.Minify. Returns 0 when it could not finish; ctx says why. */
-int minify_html(MinCtx *ctx, MinBytes src, CuBuilder *out)
+/* Minifier.Minify. Returns 0 when it could not finish; ctx says why. The
+ * input copy, the lexer and its input live in the arena: the tokens hold
+ * views of the copy, and they live there too. */
+int minify_html(MinCtx *ctx, CuStr src, CuBuilder *out)
 {
-    MinInput input;
-    MinHtmlLexer lexer;
-    MinHtmlTokens tb;
-    MinHtmlLexer *l = &lexer;
+    MinBytes buf;
+    MinInput *input = CU_PUSH(ctx->a, MinInput, 1);
+    MinHtmlLexer *l = CU_PUSH(ctx->a, MinHtmlLexer, 1);
+    MinHtmlTokens *tb = CU_PUSH(ctx->a, MinHtmlTokens, 1);
     unsigned long raw_tag_hash = 0;
     MinBytes raw_tag_mediatype = min_bytes_nil();
     int omit_space = 1; /* if true the next leading space is omitted */
     int in_pre = 0;
 
-    min_input_init(&input, src.ptr, src.len);
-    min_html_lex_init(l, &input);
-    if (!tokens_init(&tb, ctx, l)) return 0;
+    if (input == NULL || l == NULL || tb == NULL || !min_copy_input(ctx->a, src, &buf, &ctx->failed)) {
+        ctx->failed = 1;
+        return 0;
+    }
+    min_input_init(input, buf.ptr, buf.len);
+    min_html_lex_init(l, input);
+    if (!tokens_init(tb, ctx)) return 0;
     for (;;) {
-        MinHtmlToken t = *tokens_shift(&tb);
+        MinHtmlToken t = *tokens_shift(tb, ctx, l);
 
         if (ctx->failed || ctx->unsupported || ctx->limit || ctx->invalid) return 0;
         switch (t.type) {
@@ -611,7 +605,7 @@ int minify_html(MinCtx *ctx, MinBytes src, CuBuilder *out)
 
                     omit_space = 1;
                     for (;;) {
-                        const MinHtmlToken *next = tokens_peek(&tb, i);
+                        const MinHtmlToken *next = tokens_peek(tb, ctx, l, i);
 
                         /* trim if EOF, text token with leading whitespace or block token */
                         if (next->type == MH_ERROR_TOKEN) {
@@ -644,13 +638,13 @@ int minify_html(MinCtx *ctx, MinBytes src, CuBuilder *out)
 
             raw_tag_hash = 0;
             if (t.type == MH_START_TAG_TOKEN) {
-                if (tokens_peek(&tb, 0)->type == MH_ATTRIBUTE_TOKEN) has_attributes = 1;
+                if (tokens_peek(tb, ctx, l, 0)->type == MH_ATTRIBUTE_TOKEN) has_attributes = 1;
                 if (t.traits & MH_RAW_TAG) {
                     /* ignore empty script and style tags */
                     if (!has_attributes && (t.hash == MH_SCRIPT || t.hash == MH_STYLE)) {
-                        if (tokens_peek(&tb, 1)->type == MH_END_TAG_TOKEN) {
-                            tokens_shift(&tb);
-                            tokens_shift(&tb);
+                        if (tokens_peek(tb, ctx, l, 1)->type == MH_END_TAG_TOKEN) {
+                            tokens_shift(tb, ctx, l);
+                            tokens_shift(tb, ctx, l);
                             break;
                         }
                     }
@@ -660,10 +654,10 @@ int minify_html(MinCtx *ctx, MinBytes src, CuBuilder *out)
                     /* do not minify content of <style amp-boilerplate> */
                     if (has_attributes && t.hash == MH_STYLE) {
                         unsigned long want = MH_AMP_BOILERPLATE;
-                        MinHtmlToken *attrs[1];
+                        size_t idx[1];
 
-                        tokens_attributes(&tb, &want, 1, attrs);
-                        if (attrs[0] != NULL) raw_tag_hash = 0;
+                        tokens_attributes(tb, ctx, l, &want, 1, idx);
+                        if (idx[0] != NO_ATTR) raw_tag_hash = 0;
                     }
                 }
             } else if (t.hash == MH_TEMPLATE) {
@@ -690,7 +684,7 @@ int minify_html(MinCtx *ctx, MinBytes src, CuBuilder *out)
                         size_t i = 0;
 
                         for (;;) {
-                            const MinHtmlToken *next = tokens_peek(&tb, i);
+                            const MinHtmlToken *next = tokens_peek(tb, ctx, l, i);
 
                             i++;
                             /* continue if text token is empty or whitespace */
@@ -706,7 +700,7 @@ int minify_html(MinCtx *ctx, MinBytes src, CuBuilder *out)
                         size_t i = 0;
 
                         for (;;) {
-                            const MinHtmlToken *next = tokens_peek(&tb, i);
+                            const MinHtmlToken *next = tokens_peek(tb, ctx, l, i);
 
                             i++;
                             /* continue if text token */
@@ -735,7 +729,7 @@ int minify_html(MinCtx *ctx, MinBytes src, CuBuilder *out)
 
                 /* skip text in select and optgroup tags */
                 if (t.hash == MH_OPTION || t.hash == MH_OPTGROUP) {
-                    if (tokens_peek(&tb, 0)->type == MH_TEXT_TOKEN) tokens_shift(&tb);
+                    if (tokens_peek(tb, ctx, l, 0)->type == MH_TEXT_TOKEN) tokens_shift(tb, ctx, l);
                 }
                 break;
             }
@@ -751,18 +745,17 @@ int minify_html(MinCtx *ctx, MinBytes src, CuBuilder *out)
             if (has_attributes) {
                 if (t.hash == MH_META) {
                     static const unsigned long want[4] = {MH_CONTENT, MH_HTTP_EQUIV, MH_CHARSET, MH_NAME};
-                    MinHtmlToken *attrs[4];
-                    MinHtmlToken *content;
+                    size_t idx[4];
 
-                    tokens_attributes(&tb, want, 4, attrs);
-                    content = attrs[0];
-                    if (content != NULL) {
-                        MinHtmlToken *http_equiv = attrs[1];
-                        MinHtmlToken *name = attrs[3];
+                    tokens_attributes(tb, ctx, l, want, 4, idx);
+                    if (idx[0] != NO_ATTR) {
+                        MinHtmlToken *content = &tb->buf[idx[0]];
+                        MinHtmlToken *http_equiv = idx[1] != NO_ATTR ? &tb->buf[idx[1]] : NULL;
+                        MinHtmlToken *name = idx[3] != NO_ATTR ? &tb->buf[idx[3]] : NULL;
 
                         if (http_equiv != NULL) {
                             http_equiv->attr_val = min_trim_whitespace(http_equiv->attr_val);
-                            if (attrs[2] == NULL && min_equal_fold(http_equiv->attr_val, "content-type")) {
+                            if (idx[2] == NO_ATTR && min_equal_fold(http_equiv->attr_val, "content-type")) {
                                 content->attr_val = min_minify_mediatype(content->attr_val);
                                 if (min_bytes_eq(content->attr_val, "text/html;charset=utf-8")) {
                                     unsigned char *utf8 = (unsigned char *)cu_arena_push_bytes(ctx->a, 12);
@@ -784,43 +777,46 @@ int minify_html(MinCtx *ctx, MinBytes src, CuBuilder *out)
                             if (min_equal_fold(name->attr_val, "keywords")) {
                                 content->attr_val = replace_all(content->attr_val, ", ", ",");
                             } else if (min_equal_fold(name->attr_val, "viewport")) {
-                                minify_viewport(ctx, content);
+                                content->attr_val = minify_viewport(ctx, content->attr_val);
                             }
                         }
                     }
                 } else if (t.hash == MH_SCRIPT) {
                     static const unsigned long want[2] = {MH_SRC, MH_CHARSET};
-                    MinHtmlToken *attrs[2];
+                    size_t idx[2];
 
-                    tokens_attributes(&tb, want, 2, attrs);
-                    if (attrs[0] != NULL && attrs[1] != NULL) attrs[1]->text = min_bytes_nil();
+                    tokens_attributes(tb, ctx, l, want, 2, idx);
+                    if (idx[0] != NO_ATTR && idx[1] != NO_ATTR) tb->buf[idx[1]].text = min_bytes_nil();
                 } else if (t.hash == MH_INPUT) {
                     static const unsigned long want[2] = {MH_TYPE, MH_VALUE};
-                    MinHtmlToken *attrs[2];
+                    size_t idx[2];
 
-                    tokens_attributes(&tb, want, 2, attrs);
-                    if (attrs[0] != NULL && attrs[1] != NULL) {
-                        int is_radio = min_equal_fold(attrs[0]->attr_val, "radio");
+                    tokens_attributes(tb, ctx, l, want, 2, idx);
+                    if (idx[0] != NO_ATTR && idx[1] != NO_ATTR) {
+                        MinHtmlToken *value = &tb->buf[idx[1]];
+                        int is_radio = min_equal_fold(tb->buf[idx[0]].attr_val, "radio");
 
-                        if (!is_radio && attrs[1]->attr_val.len == 0) attrs[1]->text = min_bytes_nil();
-                        else if (is_radio && min_equal_fold(attrs[1]->attr_val, "on")) attrs[1]->text = min_bytes_nil();
+                        if (!is_radio && value->attr_val.len == 0) value->text = min_bytes_nil();
+                        else if (is_radio && min_equal_fold(value->attr_val, "on")) value->text = min_bytes_nil();
                     }
                 } else if (t.hash == MH_A) {
                     static const unsigned long want[2] = {MH_ID, MH_NAME};
-                    MinHtmlToken *attrs[2];
+                    size_t idx[2];
 
-                    tokens_attributes(&tb, want, 2, attrs);
-                    if (attrs[0] != NULL && attrs[1] != NULL) {
-                        if (attrs[0]->attr_val.len == attrs[1]->attr_val.len &&
-                            memcmp(attrs[0]->attr_val.ptr, attrs[1]->attr_val.ptr, attrs[0]->attr_val.len) == 0) {
-                            attrs[1]->text = min_bytes_nil();
+                    tokens_attributes(tb, ctx, l, want, 2, idx);
+                    if (idx[0] != NO_ATTR && idx[1] != NO_ATTR) {
+                        MinBytes id = tb->buf[idx[0]].attr_val;
+                        MinBytes name = tb->buf[idx[1]].attr_val;
+
+                        if (id.len == name.len && memcmp(id.ptr, name.ptr, id.len) == 0) {
+                            tb->buf[idx[1]].text = min_bytes_nil();
                         }
                     }
                 }
 
                 /* write attributes */
                 for (;;) {
-                    MinHtmlToken attr = *tokens_shift(&tb);
+                    MinHtmlToken attr = *tokens_shift(tb, ctx, l);
                     MinBytes val;
 
                     if (ctx->failed) return 0;
@@ -953,18 +949,18 @@ int minify_html(MinCtx *ctx, MinBytes src, CuBuilder *out)
                     }
                 }
             } else {
-                tokens_shift(&tb); /* StartTagClose */
+                tokens_shift(tb, ctx, l); /* StartTagClose */
             }
             wlit(out, ">");
 
             /* skip text in select and optgroup tags */
             if (t.hash == MH_SELECT || t.hash == MH_OPTGROUP) {
-                if (tokens_peek(&tb, 0)->type == MH_TEXT_TOKEN) tokens_shift(&tb);
+                if (tokens_peek(tb, ctx, l, 0)->type == MH_TEXT_TOKEN) tokens_shift(tb, ctx, l);
             }
 
             /* keep space after phrasing tags (<i>, <span>, ...) FontAwesome etc. */
             if (t.type == MH_START_TAG_TOKEN && t.traits == MH_NORMAL_TAG) {
-                const MinHtmlToken *next = tokens_peek(&tb, 0);
+                const MinHtmlToken *next = tokens_peek(tb, ctx, l, 0);
 
                 if (next->hash == t.hash && next->type == MH_END_TAG_TOKEN) omit_space = 0;
             }
