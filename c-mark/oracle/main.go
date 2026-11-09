@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/yuin/goldmark"
@@ -34,6 +35,7 @@ import (
 	"github.com/yuin/goldmark/parser"
 	"github.com/yuin/goldmark/renderer"
 	"github.com/yuin/goldmark/renderer/html"
+	"github.com/yuin/goldmark/text"
 	"github.com/yuin/goldmark/util"
 )
 
@@ -201,14 +203,12 @@ func (siteCodeRenderer) RegisterFuncs(reg renderer.NodeRendererFuncRegisterer) {
 		}
 		n := node.(*ast.FencedCodeBlock)
 		// The template reads .Attributes.lang, which Hugo fills only from a
-		// {lang=...} attribute; the info-string language is .Type, which the
-		// template never reads. So the live class is "language-" unless an
-		// attribute names one.
-		lang := ""
-		if v, ok := n.AttributeString("lang"); ok {
-			if b, ok := v.([]byte); ok {
-				lang = string(bytes.ToLower(b))
-			}
+		// {lang=...} attribute in the info string; the info-string language
+		// is .Type, which the template never reads. So the live class is
+		// "language-" unless an attribute names one.
+		lang, err := siteLang(n, src)
+		if err != nil {
+			return ast.WalkStop, err
 		}
 		var inner bytes.Buffer
 		lines := n.Lines()
@@ -224,6 +224,90 @@ func (siteCodeRenderer) RegisterFuncs(reg renderer.NodeRendererFuncRegisterer) {
 		w.WriteString("</code></pre>\n")
 		return ast.WalkSkipChildren, nil
 	})
+}
+
+// siteLang is `{{ with .Attributes.lang }}{{ $lang = (lower .) }}{{ end }}`
+// under Hugo 0.120.4. Hugo routes a block whose language is "mermaid" to
+// render-codeblock-mermaid.html instead (codeblocks/render.go Render,
+// getLang); that hook is not reproduced, so such a block is an error.
+// .Attributes comes from codeblocks/render.go getAttributes: goldmark sets
+// no attributes on fenced code, so Hugo parses the span from the last '{'
+// before the first '}' of the info string with parser.ParseAttributes, and
+// fails the build when that span does not parse. attributes.New lowercases
+// names, drops on* names, keeps []byte values as strings and bool/float64
+// as they are, and panics on any other value; Attributes() builds a map in
+// order, so the last "lang" wins. `with` skips false, 0 and "", and lower
+// casts with cast.ToString (floats as strconv 'f', -1).
+func siteLang(n *ast.FencedCodeBlock, src []byte) (string, error) {
+	language := string(n.Language(src))
+	if l, _, _ := strings.Cut(language, "{"); l == "mermaid" {
+		return "", fmt.Errorf("mermaid code blocks use a hook c-mark does not reproduce")
+	}
+	if n.Info == nil {
+		return "", nil
+	}
+	info := n.Info.Segment.Value(src)
+	start, end := -1, -1
+	for i, c := range info {
+		if end == -1 && c == '{' {
+			start = i
+		}
+		if start != -1 && c == '}' {
+			end = i
+			break
+		}
+	}
+	if start == -1 || end == -1 {
+		return "", nil
+	}
+	attrs, ok := parser.ParseAttributes(text.NewReader(info[start : end+1]))
+	if !ok {
+		return "", fmt.Errorf("failed to parse Markdown attributes; you may need to quote the values")
+	}
+	holder := ast.NewTextBlock()
+	for _, a := range attrs {
+		holder.SetAttribute(a.Name, a.Value)
+	}
+	var lang any
+	found := false
+	for _, a := range holder.Attributes() {
+		name := strings.ToLower(string(a.Name))
+		if strings.HasPrefix(name, "on") {
+			continue
+		}
+		var v any
+		switch vv := a.Value.(type) {
+		case bool, float64:
+			v = vv
+		case []byte:
+			v = string(vv)
+		case []any:
+			v = vv // hl_lines ranges in Hugo; never a usable lang
+		default:
+			return "", fmt.Errorf("hugo panics: attribute value not implemented: %T", vv)
+		}
+		if name == "lang" {
+			lang, found = v, true
+		}
+	}
+	if !found {
+		return "", nil
+	}
+	switch v := lang.(type) {
+	case string:
+		return strings.ToLower(v), nil
+	case bool:
+		if !v {
+			return "", nil
+		}
+		return "true", nil
+	case float64:
+		if v == 0 {
+			return "", nil
+		}
+		return strconv.FormatFloat(v, 'f', -1, 64), nil
+	}
+	return "", fmt.Errorf("a list-valued lang attribute is not reproduced")
 }
 
 // htmlEscape is Go's template htmlEscape as Hugo's htmlEscape function
