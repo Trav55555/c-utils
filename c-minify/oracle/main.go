@@ -103,8 +103,10 @@ func main() {
 	}
 	src, err := io.ReadAll(os.Stdin)
 	check(err)
-	o := Site()
-	if *optJSON != "" {
+	var o Options
+	if *optJSON == "" {
+		o = Site()
+	} else {
 		check(json.Unmarshal([]byte(*optJSON), &o))
 	}
 	r := run(*typ, o, hugoEmbedded(o), src)

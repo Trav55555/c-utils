@@ -868,10 +868,11 @@ int minify_html(MinCtx *ctx, MinBytes src, CuBuilder *out)
                                   (t.hash == MH_BUTTON && min_equal_fold(val, "submit")))) ||
                                 (attr.hash == MH_METHOD && min_equal_fold(val, "get")) ||
                                 (attr.hash == MH_ENCTYPE && min_equal_fold(val, "application/x-www-form-urlencoded")) ||
-                                (attr.hash == MH_COLSPAN && min_bytes_eq(val, "1")) ||
-                                (attr.hash == MH_ROWSPAN && min_bytes_eq(val, "1")) ||
+                                /* html.go's oneBytes is []byte("one"), so a value of 1 stays */
+                                (attr.hash == MH_COLSPAN && min_bytes_eq(val, "one")) ||
+                                (attr.hash == MH_ROWSPAN && min_bytes_eq(val, "one")) ||
                                 (attr.hash == MH_SHAPE && min_equal_fold(val, "rect")) ||
-                                (attr.hash == MH_SPAN && min_bytes_eq(val, "1")) ||
+                                (attr.hash == MH_SPAN && min_bytes_eq(val, "one")) ||
                                 (attr.hash == MH_MEDIA && t.hash == MH_STYLE && min_equal_fold(val, "all"))) {
                                 continue;
                             }
