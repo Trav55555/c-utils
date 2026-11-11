@@ -18,19 +18,42 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # A scheduled run builds only a commit that has no nightly result yet. This
+  # check runs on the CI pool, so a night with nothing new never wakes the
+  # build host: its job is skipped, not queued.
+  unbuilt:
+    if: github.event_name == 'schedule' && vars.CUTILS_CI_REPOSITORY != '' && github.repository == vars.CUTILS_CI_REPOSITORY
+    runs-on: ci-arm64
+    timeout-minutes: 5
+    outputs:
+      build: ${{ steps.check.outputs.build }}
+    steps:
+      - id: check
+        env:
+          TOKEN: ${{ github.token }}
+          API: ${{ github.server_url }}/api/v1/repos/${{ github.repository }}
+          SHA: ${{ github.sha }}
+        # An unanswered status query builds anyway: a missed nightly is worse
+        # than a repeated one.
+        run: |
+          statuses="$(curl -fsS -H "Authorization: token $TOKEN" "$API/commits/$SHA/statuses?limit=50" || echo '[]')"
+          if printf '%s' "$statuses" | python3 -c 'import json, sys; sys.exit(0 if any(s.get("context") == sys.argv[1] and s.get("status") in ("success", "failure", "error") for s in json.load(sys.stdin)) else 1)' 'c-utils nightly'; then
+            echo build=false >> "$GITHUB_OUTPUT"
+            echo "$SHA already has a 'c-utils nightly' result; nothing to build"
+          else
+            echo build=true >> "$GITHUB_OUTPUT"
+          fi
+
   verify:
+    needs: unbuilt
     # Pushes and manual runs must come from the trusted actor. Gitea does not
     # attribute a scheduled run to a pusher, so its actor proves nothing; a
     # schedule runs only the workflow committed on the default branch, which
     # already takes repository write access to change, so the repository
     # match alone admits it.
     if: >-
-      vars.CUTILS_CI_REPOSITORY != '' &&
-      github.repository == vars.CUTILS_CI_REPOSITORY &&
-      (github.event_name == 'schedule' ||
-      ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
-      vars.CUTILS_CI_ACTOR != '' &&
-      github.actor == vars.CUTILS_CI_ACTOR))
+      always() && (github.event_name != 'schedule' || needs.unbuilt.outputs.build == 'true') &&
+      (vars.CUTILS_CI_REPOSITORY != '' && github.repository == vars.CUTILS_CI_REPOSITORY && (github.event_name == 'schedule' || ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') && vars.CUTILS_CI_ACTOR != '' && github.actor == vars.CUTILS_CI_ACTOR)))
     runs-on: ${{ vars.CUTILS_CI_RUNNER }}
     # A deep run (at most 40 minutes), or a gate run waiting behind one.
     timeout-minutes: 90
@@ -56,3 +79,15 @@ jobs:
           path: ci-artifacts/
           if-no-files-found: error
           retention-days: 30
+      - name: Record the nightly result on the commit
+        if: always() && github.event_name != 'push'
+        env:
+          TOKEN: ${{ github.token }}
+          API: ${{ github.server_url }}/api/v1/repos/${{ github.repository }}
+          SHA: ${{ github.sha }}
+          STATE: ${{ job.status == 'success' && 'success' || 'failure' }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          curl -fsS -X POST -H "Authorization: token $TOKEN" -H 'Content-Type: application/json' \
+            -d "{\"state\":\"$STATE\",\"context\":\"c-utils nightly\",\"target_url\":\"$RUN_URL\"}" \
+            "$API/statuses/$SHA" >/dev/null
