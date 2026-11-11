@@ -53,7 +53,12 @@ jobs:
     # match alone admits it.
     if: >-
       always() && (github.event_name != 'schedule' || needs.unbuilt.outputs.build == 'true') &&
-      (vars.CUTILS_CI_REPOSITORY != '' && github.repository == vars.CUTILS_CI_REPOSITORY && (github.event_name == 'schedule' || ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') && vars.CUTILS_CI_ACTOR != '' && github.actor == vars.CUTILS_CI_ACTOR)))
+      vars.CUTILS_CI_REPOSITORY != '' &&
+      github.repository == vars.CUTILS_CI_REPOSITORY &&
+      (github.event_name == 'schedule' ||
+      ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      vars.CUTILS_CI_ACTOR != '' &&
+      github.actor == vars.CUTILS_CI_ACTOR))
     runs-on: ${{ vars.CUTILS_CI_RUNNER }}
     # A deep run (at most 40 minutes), or a gate run waiting behind one.
     timeout-minutes: 90

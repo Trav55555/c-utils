@@ -191,7 +191,8 @@ class WorkflowTests(unittest.TestCase):
         match = re.search(r"    if: >-\n((?:      .*\n)+)", text)
         self.assertIsNotNone(match)
         actual = " ".join(line.strip() for line in match.group(1).splitlines())
-        expected = ("vars.CUTILS_CI_REPOSITORY != '' && "
+        expected = ("always() && (github.event_name != 'schedule' || needs.unbuilt.outputs.build == 'true') && "
+                    "vars.CUTILS_CI_REPOSITORY != '' && "
                     "github.repository == vars.CUTILS_CI_REPOSITORY && "
                     "(github.event_name == 'schedule' || "
                     "((github.event_name == 'push' || github.event_name == 'workflow_dispatch') && "
@@ -203,6 +204,15 @@ class WorkflowTests(unittest.TestCase):
             self.assertIn(key + ": ${{ vars." + key + " }}", text)
         self.assertIn("persist-credentials: false", text)
         self.assertNotIn("pull_request", text)
+
+    def test_scheduled_runs_build_only_an_unbuilt_head(self):
+        text = (ROOT / ".gitea/workflows/ci.yml").read_text()
+        self.assertIn("  unbuilt:\n    if: github.event_name == 'schedule' && vars.CUTILS_CI_REPOSITORY != '' && "
+                      "github.repository == vars.CUTILS_CI_REPOSITORY\n    runs-on: ci-arm64\n", text)
+        self.assertIn("  verify:\n    needs: unbuilt\n", text)
+        self.assertIn("'c-utils nightly'; then\n            echo build=false", text)
+        self.assertIn("- name: Record the nightly result on the commit\n        if: always() && github.event_name != 'push'\n", text)
+        self.assertIn('\\"context\\":\\"c-utils nightly\\"', text)
 
     def test_push_runs_gate_and_nightly_runs_deep(self):
         text = (ROOT / ".gitea/workflows/ci.yml").read_text()
