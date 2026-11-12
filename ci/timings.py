@@ -1,6 +1,7 @@
 """Prints where a dcheck run spent its time, for the CI job log, which outlives
 the uploaded artifacts: each check's total from timing.tsv, and the slowest
-semantics files from semantics.log with any at half their limit or more.
+semantics files and CBMC proofs from semantics.log and cbmc.log, with any at
+half their limit or more.
 
 Usage: ci/timings.py LOGS_DIR"""
 import re
@@ -38,11 +39,13 @@ def report(logs):
         totals = check_totals(timing.read_text(errors="replace"))
         if totals:
             lines.append("check times: " + ", ".join(f"{name} {secs:.0f} s" for name, secs in totals))
-    semantics = logs / "semantics.log"
-    if semantics.is_file():
-        times = file_times(semantics.read_text(errors="replace"))
+    for check, what in (("semantics", "semantics files"), ("cbmc", "CBMC proofs")):
+        log = logs / f"{check}.log"
+        if not log.is_file():
+            continue
+        times = file_times(log.read_text(errors="replace"))
         if times:
-            lines.append(f"slowest semantics files ({len(times)} timed):")
+            lines.append(f"slowest {what} ({len(times)} timed):")
             lines += [f"  {secs} s of {limit} s  {name}" for name, secs, limit in times[:SLOWEST]]
             near = [name for name, secs, limit in times if 2 * secs >= limit]
             if near:

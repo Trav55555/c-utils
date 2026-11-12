@@ -46,6 +46,18 @@ class Timings(unittest.TestCase):
         self.assertEqual(lines[2], "  300 s of 300 s  tests/test_b.c")
         self.assertEqual(lines[-1], "at half their limit or more: tests/test_b.c, tests/test_c.c")
 
+    def test_report_includes_cbmc_proofs_after_semantics(self):
+        d = self.logs(TSV, SEMANTICS)
+        (d / "cbmc.log").write_text("DCHECK: proofs/proof_a.c took 40 s of 600 s\n"
+                                    "DCHECK: proofs/proof_b.c timed out under cbmc after 600 s\n"
+                                    "DCHECK: proofs/proof_b.c took 600 s of 600 s\n")
+        lines = TIMINGS.report(d)
+        start = lines.index("slowest CBMC proofs (2 timed):")
+        self.assertGreater(start, lines.index("slowest semantics files (3 timed):"))
+        self.assertEqual(lines[start + 1:], ["  600 s of 600 s  proofs/proof_b.c",
+                                             "  40 s of 600 s  proofs/proof_a.c",
+                                             "at half their limit or more: proofs/proof_b.c"])
+
     def test_report_without_per_file_lines(self):
         # A toolchain that predates per-file times still gets its check totals.
         self.assertEqual(TIMINGS.report(self.logs(TSV, "test_a: PASS\n")),
