@@ -239,6 +239,11 @@ no directory backend. Unsupported initialization returns failure with
 `ENOSYS` where available; errno can be zero on other platforms.
 See [thread design and restrictions](docs/THREADS.md).
 
+Native platform support is Linux with glibc. CI builds and tests there with
+GCC and Clang. macOS is not supported yet: the strict C89 build lacks
+`flock` and `MSG_DONTWAIT` there, and several platform tests fail
+([roadmap](ROADMAP.md#2-platform-module)).
+
 Run the ordinary tests with a C compiler and Make. No `dcheck` is required:
 
 ```sh
