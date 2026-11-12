@@ -31,17 +31,31 @@ settings select its location, not its expected contents. The fetcher validates
 its settings before invoking the API client, rejects unsafe archives, and
 checks the extracted tree. It never falls back to another login or transport.
 
-A push to `main` or a `verify/**` branch runs the gate tier, `dcheck gate`,
-and passes only if regions is among its passes. The deep tier (the gate's
-checks plus Cerberus, Valgrind, fuzzing, and CBMC) runs nightly at 06:00 UTC
-and on demand from the Actions tab (`workflow_dispatch`). Each event has its
-own concurrency group, so a push does not cancel a nightly run, and a lock on
-the runner runs them one at a time.
+A push to any branch runs the gate tier, `dcheck gate`, so work is checked
+before it is merged, and records the result on the commit as the
+`c-utils gate` status. The gate runs in the root, then in each tracked
+subproject with its own `dcheck.conf` (`git ls-files '*/dcheck.conf'`), each
+in the scratch copy of the repository with its logs under
+`ci-artifacts/<path with / as _>/`. The job log ends with each project's
+PASS or FAIL, and the tier fails if any project fails. The deep tier (the
+gate's checks plus Cerberus, Valgrind, fuzzing, and CBMC) runs nightly at
+06:00 UTC and on demand from the Actions tab (`workflow_dispatch`), for the
+root project only: the subprojects' deep checks would not fit its time
+budget. Each event and branch has its own concurrency group, so a push does
+not cancel a nightly run, and a lock on the runner runs them one at a time.
+
+dcheck reports a check it cannot run as SKIP and still passes, so
+`ci/verify.sh` lists the checks each tier must pass: every gate check but
+authority, and for the deep tier those plus semantics, Valgrind, fuzzing, and
+CBMC. A required check that skips, fails, or does not run fails the tier, as
+does a skip of any other check. authority is the one allowed skip: it needs a
+`ward.toml`, which no project here has. A subproject that cannot run a check
+gets its own allowed skip, with the reason, in `subproject_skips`.
 
 The nightly run calls `make deep` with `DCHECK_JSON`, so dcheck writes its
 JSON result (`result.json`) instead of its summary. `ci/findings.py` judges
-the run from it: the run passes only if dcheck passes with regions among its
-passes. It prints each check's status to the job log and keeps one open issue
+the run from it: the run passes only if dcheck passes with every required
+deep check among its passes. It prints each check's status to the job log and keeps one open issue
 titled "Nightly findings", through the `CUTILS_CI_API_LOGIN` profile in the
 trusted repository. A failing run opens that issue, or replaces its
 description with the current findings and comments; a passing run comments
@@ -61,7 +75,7 @@ each check's time to the job log, and, with a toolchain that logs them, the
 slowest semantics files and any at half the per-file limit or more; the job
 log stays readable when the artifact cannot be fetched. The deep tier keeps its
 2,400-second aggregate timeout and complete deep-check workload; the gate has
-900 seconds. Both call the same `tools/verify_deep.py` scope runner as
+900 seconds per project. Both call the same `tools/verify_deep.py` scope runner as
 `make deep`. The scope kills all its processes at the deadline, including
 new process groups and SIGTERM-ignoring children. The runner also rejects
 leftover children after a successful checker exit. Public workflow tests report
