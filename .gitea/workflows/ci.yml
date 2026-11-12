@@ -1,18 +1,19 @@
 name: c-utils CI
 
-# Pushes to main, and to verify/* branches for checking work before it lands
-# on main, run the gate tier. The deep tier (Cerberus, Valgrind, fuzzing,
-# CBMC) runs nightly at 06:00 UTC and by hand, and keeps the "Nightly
-# findings" issue (ci/README.md).
+# A push to any branch runs the gate tier, so work is checked before it lands
+# on main, and records it on the commit as "c-utils gate". The deep tier
+# (Cerberus, Valgrind, fuzzing, CBMC) runs nightly at 06:00 UTC and by hand,
+# and keeps the "Nightly findings" issue (ci/README.md).
 on:
   push:
-    branches: [main, 'verify/**']
+    branches: ['**']
   schedule:
     - cron: '0 6 * * *'
   workflow_dispatch:
 
-# One group per event, so a push never cancels a nightly run or the reverse;
-# ci/verify.sh's lock runs them one at a time on the runner.
+# One group per event and branch, so a push never cancels a nightly run, a
+# run on another branch, or the reverse; ci/verify.sh's lock runs them one at
+# a time on the runner.
 concurrency:
   group: c-utils-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
@@ -60,8 +61,9 @@ jobs:
       vars.CUTILS_CI_ACTOR != '' &&
       github.actor == vars.CUTILS_CI_ACTOR))
     runs-on: ${{ vars.CUTILS_CI_RUNNER }}
-    # A deep run (at most 40 minutes), or a gate run waiting behind one.
-    timeout-minutes: 90
+    # A deep run (at most 40 minutes), or a gate run waiting behind one. The
+    # gate takes minutes per project, at most 15 each.
+    timeout-minutes: 120
     env:
       CUTILS_CI_API_LOGIN: ${{ vars.CUTILS_CI_API_LOGIN }}
       CUTILS_CI_TOOLCHAIN_REPOSITORY: ${{ vars.CUTILS_CI_TOOLCHAIN_REPOSITORY }}
@@ -95,4 +97,16 @@ jobs:
         run: |
           curl -fsS -X POST -H "Authorization: token $TOKEN" -H 'Content-Type: application/json' \
             -d "{\"state\":\"$STATE\",\"context\":\"c-utils nightly\",\"target_url\":\"$RUN_URL\"}" \
+            "$API/statuses/$SHA" >/dev/null
+      - name: Record the gate result on the commit
+        if: always() && github.event_name == 'push'
+        env:
+          TOKEN: ${{ github.token }}
+          API: ${{ github.server_url }}/api/v1/repos/${{ github.repository }}
+          SHA: ${{ github.sha }}
+          STATE: ${{ job.status == 'success' && 'success' || 'failure' }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          curl -fsS -X POST -H "Authorization: token $TOKEN" -H 'Content-Type: application/json' \
+            -d "{\"state\":\"$STATE\",\"context\":\"c-utils gate\",\"target_url\":\"$RUN_URL\"}" \
             "$API/statuses/$SHA" >/dev/null

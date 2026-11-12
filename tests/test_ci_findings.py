@@ -60,6 +60,27 @@ class JudgeTests(unittest.TestCase):
                 self.assertEqual(FINDINGS.judge(result("pass", checks), ["regions"]),
                                  (False, ["required check regions did not pass"]))
 
+    def test_allowed_skip_passes(self):
+        checks = [REGIONS, {"name": "authority", "status": "skip"}]
+        self.assertEqual(FINDINGS.judge(result("pass", checks), ["regions"], allowed_skips=["authority"]),
+                         (True, []))
+
+    def test_skip_outside_the_allow_list_fails(self):
+        checks = [REGIONS, {"name": "authority", "status": "skip"}, {"name": "newcheck", "status": "skip"}]
+        self.assertEqual(FINDINGS.judge(result("pass", checks), ["regions"], allowed_skips=["authority"]),
+                         (False, ["check newcheck skipped and not allowed to"]))
+
+    def test_required_and_allowed_skips_from_the_command_line(self):
+        checks = [REGIONS, {"name": "authority", "status": "skip"}]
+        with tempfile.NamedTemporaryFile("w", suffix=".json") as file:
+            json.dump(result("pass", checks), file)
+            file.flush()
+            argv = ["--result", file.name, "--root", "/", "--rev", "abc", "--run-url", "u", "--require", "regions"]
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(FINDINGS.main(argv + ["--allow-skip", "authority"]), 0)
+                self.assertEqual(FINDINGS.main(argv), 1)
+                self.assertEqual(FINDINGS.main(argv + ["--allow-skip", "authority", "--require", "cbmc"]), 1)
+
     def test_failed_checks_are_named(self):
         self.assertEqual(FINDINGS.judge(result("fail", [REGIONS, SEMANTICS_FAIL]), ["regions"]),
                          (False, ["dcheck deep: semantics"]))

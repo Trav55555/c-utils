@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Judge a nightly run from dcheck's JSON result and keep its findings issue.
 
-A run passes when its acceptance exited 0, dcheck's result passes and every
+A run passes when its acceptance exited 0, dcheck's result passes, every
 --require check is among its passes, so a required check cannot pass by
-being skipped. Each failed
+being skipped, and every other skipped check is an --allow-skip. Each failed
 check becomes a finding: its diagnostics (file, line, rule) and the end of its
 log. One open issue titled TITLE holds the current findings: a failing run
 opens it or replaces its body and comments, and a passing run comments and
@@ -48,7 +48,7 @@ def load_result(path):
     return result
 
 
-def judge(result, required, exit_status=0):
+def judge(result, required, exit_status=0, allowed_skips=()):
     """(passed, reasons): the verdict and why a failing run failed."""
     reasons = ["acceptance exited %d" % exit_status] if exit_status else []
     if result is None:
@@ -59,6 +59,10 @@ def judge(result, required, exit_status=0):
     for name in required:
         if name not in passed:
             reasons.append("required check %s did not pass" % name)
+    for check in result.get("checks", []):
+        name = check.get("name")
+        if check.get("status") == "skip" and name not in required and name not in allowed_skips:
+            reasons.append("check %s skipped and not allowed to" % name)
     return not reasons, reasons
 
 
@@ -204,6 +208,7 @@ def main(argv=None):
     parser.add_argument("--result", required=True, help="dcheck --json output")
     parser.add_argument("--root", required=True, help="directory the result's log paths are relative to")
     parser.add_argument("--require", action="append", default=[], help="a check that must pass")
+    parser.add_argument("--allow-skip", action="append", default=[], help="a check that may skip")
     parser.add_argument("--log", help="the run's own log, quoted when no check failed")
     parser.add_argument("--exit-status", type=int, default=0, help="the acceptance run's exit status")
     parser.add_argument("--rev", required=True)
@@ -214,7 +219,7 @@ def main(argv=None):
     parser.add_argument("--within", type=float, help="seconds all the issue calls may take together")
     args = parser.parse_args(argv)
     result = load_result(args.result)
-    passed, reasons = judge(result, args.require, args.exit_status)
+    passed, reasons = judge(result, args.require, args.exit_status, args.allow_skip)
     body = report(result, reasons, args.root, args.rev, args.run_url, args.log)
     # dcheck --json prints no summary of its own; the job log gets this one.
     for check in (result or {}).get("checks", []):
