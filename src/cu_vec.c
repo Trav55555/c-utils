@@ -21,6 +21,9 @@ static void check_size(const CuVec *v, size_t elem_size)
 /* Growing under any scope but the vector's own could leave it pointing at
  * memory that scope's end frees. The field is read directly: this runs on
  * every push. */
+/** regions: borrows; modifies none */
+static void check_scope(const CuVec *v);
+
 static void check_scope(const CuVec *v)
 {
     if (v->arena->scope != v->scope)

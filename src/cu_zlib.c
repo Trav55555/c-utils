@@ -176,6 +176,7 @@ static int decode(Bits *s, const Code *c, int *sym)
 }
 
 /* The output, which is also the window that back-references copy from. */
+/** regions: invariant p in a */
 typedef struct Out {
     CuArena *a;
     unsigned char *p;
