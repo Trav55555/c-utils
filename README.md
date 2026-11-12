@@ -251,6 +251,14 @@ On older glibc, pass the pthread flag through `CFLAGS`:
 make test CC=gcc CFLAGS='-g -pthread'
 ```
 
+To replay each fuzz harness's seed corpus and run it briefly under
+libFuzzer with ASan and UBSan (needs clang; `FUZZ_RUNS` and `FUZZ_SECONDS`
+bound the random pass):
+
+```sh
+make fuzz-smoke
+```
+
 ### Strict WASI checks
 
 With Zig, Wasmtime, Python 3, Linux cgroup v2, and a working user systemd manager:
