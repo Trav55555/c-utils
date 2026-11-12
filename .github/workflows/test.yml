@@ -68,6 +68,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - run: make -k test CC=clang CFLAGS="-g -D_DARWIN_C_SOURCE" || true
+      - run: for t in build/test_*; do [ -x $t ] && { echo "== $t"; $t >/dev/null 2>&1 && echo PASS || echo "FAIL $?"; }; done
       - run: make test CC=clang CFLAGS="-g -D_DARWIN_C_SOURCE"
       - run: make test-curun CC=clang CFLAGS="-g -D_DARWIN_C_SOURCE"
       - run: make test-cuhealth CC=clang CFLAGS="-g -D_DARWIN_C_SOURCE"
