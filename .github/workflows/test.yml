@@ -1,28 +1,93 @@
 name: test
 
-on: [push, pull_request]
+# Pushes run everywhere; pull requests run only from forks, since a same-repo
+# PR is already covered by its branch push.
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  schedule:
+    - cron: '17 4 * * *'
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
+  helpers:
+    if: github.event_name != 'schedule' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - name: Check CI helpers offline
+        run: |
+          python3 -I -m unittest discover -s tests -p 'test_ci*.py'
+          python3 -I -m unittest discover -s tests -p 'test_verify*.py'
+
   test:
-    runs-on: ubuntu-latest
+    if: github.event_name != 'schedule' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     strategy:
+      fail-fast: false
       matrix:
         include:
           - cc: gcc
             cflags: -g
+          - cc: gcc
+            cflags: -O2 -g
           - cc: clang
             cflags: -g
           - cc: clang
             cflags: -g -fsanitize=address,undefined -fno-sanitize-recover=all
     steps:
-      - uses: actions/checkout@v5
-      - name: Check CI helpers offline
-        run: |
-          python3 -I -m unittest discover -s tests -p 'test_ci*.py'
-          python3 -I -m unittest discover -s tests -p 'test_verify*.py'
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - run: make test CC=${{ matrix.cc }} CFLAGS="${{ matrix.cflags }}"
       - run: make test-curun CC=${{ matrix.cc }} CFLAGS="${{ matrix.cflags }}"
       - run: make test-cuhealth CC=${{ matrix.cc }} CFLAGS="${{ matrix.cflags }}"
+      - name: Subproject tests
+        run: |
+          # c-mark and c-minify live on branches not yet merged here.
+          for dir in c-mark c-minify; do
+            if [ -f "$dir/Makefile" ]; then
+              echo "subproject $dir: running"
+              make -C "$dir" test CC=${{ matrix.cc }} CFLAGS="${{ matrix.cflags }}"
+            else
+              echo "subproject $dir: absent, skipped"
+            fi
+          done
+
+  fuzz-smoke:
+    if: github.event_name != 'schedule' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - run: make fuzz-smoke FUZZ_CC=clang
+
+  # Daily differential run of c-mark against its Go oracle; a no-op until
+  # c-mark is on this branch.
+  mark-diff-fuzz:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - if: hashFiles('c-mark/Makefile') != ''
+        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
+        with:
+          go-version-file: c-mark/oracle/go.mod
+          cache-dependency-path: c-mark/oracle/go.sum
+      - if: hashFiles('c-mark/Makefile') != ''
+        run: make -C c-mark diff-fuzz SEED=${{ github.run_number }} N=500
+      - if: failure() && hashFiles('c-mark/Makefile') != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: diff-fuzz-${{ github.run_number }}
+          path: c-mark/tests/diff_fuzz
+          if-no-files-found: ignore
