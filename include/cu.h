@@ -136,11 +136,11 @@ void cu_arena_release(CuArena *a);
 /* Uninitialised memory for count elements of elem_size bytes, aligned for any
  * type. Returns NULL and marks the arena failed if count * elem_size
  * overflows or memory runs out. A zero-size push returns a non-NULL pointer. */
-/** regions: returns alloc(a) */
+/** regions: returns alloc(a); writes *a view(*a) */
 CU_MUST_USE void *cu_arena_push(CuArena *a, size_t count, size_t elem_size);
 
 /* Uninitialised bytes with no alignment. Same failure rules as cu_arena_push. */
-/** regions: returns alloc(a) */
+/** regions: returns alloc(a); writes *a view(*a) */
 CU_MUST_USE char *cu_arena_push_bytes(CuArena *a, size_t n);
 
 #define CU_PUSH(a, T, n) ((T *)cu_arena_push((a), (n), sizeof(T)))
