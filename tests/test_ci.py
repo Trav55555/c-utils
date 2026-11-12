@@ -338,6 +338,21 @@ class RequiredCheckTests(unittest.TestCase):
         self.assertEqual(required, GATE + ["semantics", "valgrind", "fuzz", "cbmc"])
         self.assertEqual(allowed, ["authority"])
 
+    def test_deep_findings_name_the_runs_commit(self):
+        # The runner's GITHUB_SHA, so a job killed mid-run still names its
+        # commit; git only when the variable is unset.
+        def rev(env):
+            with tempfile.TemporaryDirectory() as directory:
+                out = verify_sh('python3() { printf "%s\\n" "$@"; }; root="$1" work=/w GITHUB_REPOSITORY=o/r '
+                                'CUTILS_CI_API_LOGIN=l ' + env + ' findings 0', str(ROOT), cwd=directory)
+            self.assertEqual(out.returncode, 0, out.stderr)
+            args = out.stdout.splitlines()
+            return args[args.index("--rev") + 1]
+        self.assertEqual(rev("GITHUB_SHA=abc123"), "abc123")
+        head = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"],
+                              capture_output=True, text=True, check=True).stdout.strip()
+        self.assertEqual(rev("GITHUB_SHA="), head)
+
 
 class SubprojectTests(unittest.TestCase):
     def test_tracked_subprojects_only_root_excluded(self):
