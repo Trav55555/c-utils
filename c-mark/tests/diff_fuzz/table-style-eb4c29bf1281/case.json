@@ -1,0 +1,15 @@
+{
+  "driver_args": [
+    "-flags",
+    "0x1",
+    "-align",
+    "style"
+  ],
+  "note": "",
+  "oracle_options": {
+    "table": true,
+    "tableAlign": "style"
+  },
+  "seed": 1,
+  "set": "table-style"
+}
