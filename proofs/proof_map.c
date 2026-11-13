@@ -9,6 +9,9 @@
  * memory even at two keys. Arbitrary lengths and sequences are fuzzed
  * against a reference in fuzz/fuzz_map.c. malloc keeps CBMC's default
  * failure. */
+/* These loop bounds suffice for this schedule; unwinding assertions check
+ * them while keeping CBMC's memory use below the default bound of 8. */
+/* dcheck-unwindset: find.0:2,cu_map_get_.0:3,free_blocks_until.0:3 */
 #include "cu.h"
 
 #define KEY_MAX 2
