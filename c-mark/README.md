@@ -73,3 +73,7 @@ input `1. '\n--\n\t][]`; the oracle returns no HTML. The same input panics in
 raw Hugo mode, while plain CommonMark mode succeeds. c-mark renders it, but no
 reference output exists for comparison. The fuzzer reports the oracle error as
 a failure and does not exclude the input.
+
+The regions check accepts the numbered heading ID path in `mark_parser.c`.
+That static result does not prove every lifetime safe or replace the native
+tests and corpus comparison.

@@ -93,32 +93,46 @@ const MarkReference *mark_reference(MarkCtx *ctx, CuStr key)
 /* Tries "<base>-<n>" for n = 1, 2, ... until one is free, which both id
  * generators do when base is taken (ids.Generate's loop, idFactory's hook).
  * Candidates are tried under a temp scope so the ones already taken leave
- * nothing in the arena. The result is registered. */
+ * nothing in the arena. After the scope ends, the caller rebuilds and
+ * registers the selected ID. */
+static int ids_find_number(CuArena *arena, CuMap *ids, CuStr base, unsigned long *number)
+{
+    unsigned long n;
+    CuTemp t = cu_temp_begin(arena);
+
+    for (n = 1;; n++) {
+        CuBuilder cb;
+        CuStr cand;
+
+        cu_sb_init(&cb, arena);
+        cu_sb_str(&cb, base);
+        cu_sb_char(&cb, '-');
+        cu_sb_ulong(&cb, n);
+        if (!cu_sb_finish(&cb, &cand)) {
+            cu_temp_end(t);
+            return 0;
+        }
+        if (CU_MAP_GET(ids, int, cand) == NULL) break;
+    }
+    cu_temp_end(t);
+    *number = n;
+    return 1;
+}
+
 static CuStr ids_numbered(MarkCtx *ctx, CuStr base)
 {
     CuBuilder b;
     CuStr result;
     unsigned long n;
     int one = 1;
-    CuTemp t = cu_temp_begin(ctx->arena);
+    CuArena *arena = ctx->arena;
+    CuMap *ids = &ctx->ids;
 
-    for (n = 1;; n++) {
-        CuBuilder cb;
-        CuStr cand;
-
-        cu_sb_init(&cb, ctx->arena);
-        cu_sb_str(&cb, base);
-        cu_sb_char(&cb, '-');
-        cu_sb_ulong(&cb, n);
-        if (!cu_sb_finish(&cb, &cand)) {
-            cu_temp_end(t);
-            ctx->failed = 1;
-            return cu_str_empty();
-        }
-        if (CU_MAP_GET(&ctx->ids, int, cand) == NULL) break;
+    if (!ids_find_number(arena, ids, base, &n)) {
+        ctx->failed = 1;
+        return cu_str_empty();
     }
-    cu_temp_end(t);
-    cu_sb_init(&b, ctx->arena);
+    cu_sb_init(&b, arena);
     cu_sb_str(&b, base);
     cu_sb_char(&b, '-');
     cu_sb_ulong(&b, n);
@@ -126,7 +140,7 @@ static CuStr ids_numbered(MarkCtx *ctx, CuStr base)
         ctx->failed = 1;
         return cu_str_empty();
     }
-    if (CU_MAP_UPSERT(&ctx->ids, int, result, &one) == NULL) ctx->failed = 1;
+    if (CU_MAP_UPSERT(ids, int, result, &one) == NULL) ctx->failed = 1;
     return result;
 }
 
