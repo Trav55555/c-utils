@@ -58,7 +58,7 @@ findings() {
     for name in "${deep_required[@]}"; do checks+=(--require "$name"); done
     for name in "${allowed_skips[@]}"; do checks+=(--allow-skip "$name"); done
     python3 -I "$root/ci/findings.py" --result "$work/result.json" --root "$work/c-utils" \
-        "${checks[@]}" --log "$root/ci-artifacts/deep.log" --exit-status "$1" --rev "$(git -C "$root" rev-parse HEAD)" \
+        "${checks[@]}" --log "$root/ci-artifacts/deep.log" --exit-status "$1" --rev "${GITHUB_SHA:-$(git -C "$root" rev-parse HEAD)}" \
         --run-url "${GITHUB_SERVER_URL:-}/$GITHUB_REPOSITORY/actions/runs/${GITHUB_RUN_ID:-}" \
         --login "$CUTILS_CI_API_LOGIN" --repo "$GITHUB_REPOSITORY" --within 1200
 }
