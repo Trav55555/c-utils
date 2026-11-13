@@ -333,7 +333,7 @@ with swap disabled. It kills detached descendants too, fails if a successful
 checker leaves processes running, and has no unbounded fallback. Caller-owned
 inheritable descriptors, including CI's serialization lock, reach the checker;
 CLOEXEC descriptors still close. Private CI
-keeps its existing 2,400-second limit through `DEEP_SECONDS=2400`. Cleanup can
+uses a 6,000-second limit through `DEEP_SECONDS=6000`. Cleanup can
 take additional time after the execution deadline. This is resource control
 for trusted checks, not a sandbox for hostile code.
 
