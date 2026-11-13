@@ -2,6 +2,24 @@
 #include <assert.h>
 #include "cu.h"
 
+/* Element counts. Cerberus runs a push in about a tenth of a second and
+ * the full counts took it 177 s of dcheck's 300 s per-file limit, so under
+ * it they are smaller but still grow each vector through several blocks
+ * and capacity doublings; native builds keep the full counts. */
+#ifdef __cerb__
+#define PUSH_N 150L
+#define RESERVE_N 40L
+#define GROW_N 128L
+#define SCOPE_N 60L
+#define FAST_N 40L
+#else
+#define PUSH_N 1000L
+#define RESERVE_N 100L
+#define GROW_N 512L
+#define SCOPE_N 100L
+#define FAST_N 100L
+#endif
+
 typedef struct Point {
     long x;
     long y;
@@ -18,19 +36,19 @@ static void test_push_and_at(int debug)
     cu_arena_init_with(&a, 64, debug);
     CU_VEC_INIT(&v, &a, Point);
     assert(cu_vec_len(&v) == 0);
-    for (i = 0; i < 1000; i++) {
+    for (i = 0; i < PUSH_N; i++) {
         p.x = i;
         p.y = -i;
         CU_VEC_PUSH(&v, &p);
     }
     assert(!cu_vec_failed(&v));
-    assert(cu_vec_len(&v) == 1000);
+    assert(cu_vec_len(&v) == PUSH_N);
     q = CU_VEC_AT(&v, Point, 0);
     assert(q->x == 0 && q->y == 0);
-    q = CU_VEC_AT(&v, Point, 999);
-    assert(q->x == 999 && q->y == -999);
+    q = CU_VEC_AT(&v, Point, PUSH_N - 1);
+    assert(q->x == PUSH_N - 1 && q->y == -(PUSH_N - 1));
     q->x = 7;
-    assert(CU_VEC_AT(&v, Point, 999)->x == 7);
+    assert(CU_VEC_AT(&v, Point, PUSH_N - 1)->x == 7);
     cu_arena_release(&a);
 }
 
@@ -99,12 +117,12 @@ static void test_reserve_keeps_data_in_place(int debug)
 
     cu_arena_init_with(&a, 64, debug);
     CU_VEC_INIT(&v, &a, long);
-    assert(cu_vec_reserve(&v, 100));
+    assert(cu_vec_reserve(&v, RESERVE_N));
     data = CU_VEC_DATA(&v, long);
-    for (n = 0; n < 100; n++)
+    for (n = 0; n < RESERVE_N; n++)
         CU_VEC_PUSH(&v, &n);
     assert(CU_VEC_DATA(&v, long) == data);
-    assert(data[0] == 0 && data[99] == 99);
+    assert(data[0] == 0 && data[RESERVE_N - 1] == RESERVE_N - 1);
     cu_arena_release(&a);
 }
 
@@ -204,7 +222,7 @@ static void test_growth_holds_little(int debug)
     long n;
     size_t payload;
 
-    n = 512;
+    n = GROW_N;
     payload = (size_t)n * sizeof(long);
     cu_arena_init_with(&a, 64, debug);
     CU_VEC_INIT(&v, &a, long);
@@ -268,7 +286,7 @@ static void test_growth_across_scopes(int debug)
 
     cu_arena_init_with(&a, 64, debug);
     CU_VEC_INIT(&v, &a, long);
-    for (i = 0; i < 100; i++) {
+    for (i = 0; i < SCOPE_N; i++) {
         CU_VEC_PUSH(&v, &i);
         if (i % 20 == 0) {
             t = cu_temp_begin(&a);
@@ -276,18 +294,18 @@ static void test_growth_across_scopes(int debug)
             cu_temp_end(t);
         }
     }
-    assert(!cu_vec_failed(&v) && cu_vec_len(&v) == 100);
-    for (i = 0; i < 100; i++)
+    assert(!cu_vec_failed(&v) && cu_vec_len(&v) == SCOPE_N);
+    for (i = 0; i < SCOPE_N; i++)
         assert(*CU_VEC_AT(&v, long, i) == i);
     held = a.held;
     t = cu_temp_begin(&a);
     CU_VEC_INIT(&inner, &a, long);
-    for (i = 0; i < 100; i++)
+    for (i = 0; i < SCOPE_N; i++)
         CU_VEC_PUSH(&inner, &i);
-    assert(!cu_vec_failed(&inner) && *CU_VEC_AT(&inner, long, 99) == 99);
+    assert(!cu_vec_failed(&inner) && *CU_VEC_AT(&inner, long, SCOPE_N - 1) == SCOPE_N - 1);
     cu_temp_end(t);
     assert(a.held == held);
-    assert(*CU_VEC_AT(&v, long, 99) == 99);
+    assert(*CU_VEC_AT(&v, long, SCOPE_N - 1) == SCOPE_N - 1);
     cu_arena_release(&a);
 }
 
@@ -302,10 +320,10 @@ static void test_fast_macros(int debug)
 
     cu_arena_init_with(&a, 64, debug);
     CU_VEC_INIT(&v, &a, long);
-    for (i = 0; i < 100; i++)
+    for (i = 0; i < FAST_N; i++)
         CU_VEC_PUSH_FAST(&v, &i);
-    assert(!cu_vec_failed(&v) && cu_vec_len(&v) == 100);
-    for (i = 0; i < 100; i++) {
+    assert(!cu_vec_failed(&v) && cu_vec_len(&v) == FAST_N);
+    for (i = 0; i < FAST_N; i++) {
         assert(*CU_VEC_AT_FAST(&v, long, i) == i);
         assert(CU_VEC_AT_FAST(&v, long, i) == CU_VEC_AT(&v, long, i));
     }
@@ -316,7 +334,7 @@ static void test_fast_macros(int debug)
     assert(!cu_vec_reserve(&v, (size_t)-1) && cu_vec_failed(&v));
     held = a.held;
     CU_VEC_PUSH_FAST(&v, &i);
-    assert(cu_vec_len(&v) == 100 && a.held == held);
+    assert(cu_vec_len(&v) == FAST_N && a.held == held);
     cu_arena_release(&a);
 }
 

@@ -8,56 +8,90 @@ int test_http_main(void);
 #include "test_http.c"
 #undef main
 
+/* Cerberus scans a head byte by byte at about 30 ms a byte, and the full
+ * tables below ran it for 219 s of dcheck's 300 s per-file limit. Under it
+ * the entries that repeat a path another entry takes are left out (marked
+ * "native only"); every branch of cu_http_begin that rejects or sets aside
+ * a head is still reached by an entry that stays. Native, sanitizer and
+ * coverage builds run every entry. */
 static void malformed(void)
 {
     static const char *bad[] = {
         "Host: x\r\nContent-Length: 1\r\nContent-Length: 1",
+#ifndef __cerb__
         "Host: x\r\nContent-Length: 1\r\nContent-Length: 2",
-        "Host: x\r\nContent-Length: 1,1", "Host: x\r\nContent-Length:",
-        "Host: x\r\nContent-Length: +1", "Host: x\r\nContent-Length: 1 0",
+        "Host: x\r\nContent-Length: 1,1",
+#endif
+        "Host: x\r\nContent-Length:",
+        "Host: x\r\nContent-Length: +1",
+#ifndef __cerb__
+        "Host: x\r\nContent-Length: 1 0",
+#endif
         "Host: x\r\nContent-Length: 99999999999999999999999999999999",
         "Host : x", "Host: x\r\n folded: x", "Host: x\nX: y",
         "Host: x\rX: y", "Host:", "Host: x\r\nhost: y", "X: y",
-        "Host: x\r\n@: y", "Host: x\r\nX: \177", "Host: x\r\nX: \200",
+        "Host: x\r\n@: y", "Host: x\r\nX: \177",
+#ifndef __cerb__
+        "Host: x\r\nX: \200",
+#endif
         /* RFC 9112 6.3: Transfer-Encoding lines form one list, and a list
          * whose final coding is not chunked, or that has no coding, is a
          * 400. Chunked must not precede another coding (6.1), and TE with
          * Content-Length is rejected as an error (6.1, 6.3). */
         "Host: x\r\nTransfer-Encoding: gzip",
+#ifndef __cerb__
         "Host: x\r\nTransfer-Encoding: identity",
         "Host: x\r\nTransfer-Encoding: nonsense",
-        "Host: x\r\nTransfer-Encoding:", "Host: x\r\nTransfer-Encoding: , ,",
+#endif
+        "Host: x\r\nTransfer-Encoding:",
+#ifndef __cerb__
+        "Host: x\r\nTransfer-Encoding: , ,",
+#endif
         "Host: x\r\nTransfer-Encoding: chunked, chunked",
+#ifndef __cerb__
         "Host: x\r\nTransfer-Encoding: chunked, gzip",
         "Host: x\r\nTransfer-Encoding: chunked;x=1",
         "Host: x\r\nTransfer-Encoding: chunke",
+#endif
         "Host: x\r\nTransfer-Encoding: chunkedx",
         "Host: x\r\nTransfer-Encoding: chun ked",
+#ifndef __cerb__
         "Host: x\r\nTransfer-Encoding: chunked\r\nTransfer-Encoding: gzip",
         "Host: x\r\nTransfer-Encoding: chunked\r\nTransfer-Encoding: chunked",
         "Host: x\r\nTransfer-Encoding:\r\nTransfer-Encoding: ,",
         "Host: x\r\nTransfer-Encoding: chunked\r\nContent-Length: 1",
-        "Host: x\r\nContent-Length: 1\r\ntRaNsFeR-EnCoDiNg: chunked",
+#endif
+        "Host: x\r\nContent-Length: 1\r\ntRaNsFeR-EnCoDiNg: chunked"
+#ifndef __cerb__
+        ,
         "Host: x\r\nContent-Length: 1\r\ntRaNsFeR-EnCoDiNg: identity",
         "Host: x\r\nExpect: 100-continue\r\nTransfer-Encoding: gzip",
         "Host: x\r\nTransfer-Encoding: gzip\r\nUpgrade: h2c"
+#endif
     };
     static const char *unsupported[] = {
         "Host: x\r\nTransfer-Encoding: chunked",
         "Host: x\r\ntRaNsFeR-EnCoDiNg: ChUnKeD",
+#ifndef __cerb__
         "Host: x\r\nTransfer-Encoding: gzip, chunked",
         "Host: x\r\nTransfer-Encoding: chunke, chunked",
+#endif
         "Host: x\r\nTransfer-Encoding:  ,chunked,\t, \t",
+#ifndef __cerb__
         "Host: x\r\nTransfer-Encoding: gzip , chunked \t,",
         "Host: x\r\nTransfer-Encoding: gzip\r\nTransfer-Encoding: chunked",
         "Host: x\r\nTransfer-Encoding: chunked\r\nTransfer-Encoding: ,",
         "Host: x\r\nTransfer-Encoding:\r\nTransfer-Encoding: chunked",
+#endif
         "Host: x\r\nExpect: 100-continue", "Host: x\r\nUpgrade: h2c"
     };
     static const char *lines[] = {
         " GET / HTTP/1.1", "G@T / HTTP/1.1", "GET * HTTP/1.1",
         "GET /#x HTTP/1.1", "GET / HTTP/1.0", "GET / x HTTP/1.1",
-        "GET /\t HTTP/1.1", "GET /\200 HTTP/1.1", "\r\nGET / HTTP/1.1"
+        "GET /\t HTTP/1.1"
+#ifndef __cerb__
+        , "GET /\200 HTTP/1.1", "\r\nGET / HTTP/1.1"
+#endif
     };
     char wire[512];
     size_t i;
