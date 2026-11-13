@@ -129,6 +129,10 @@ int main(int argc, char **argv)
         fprintf(stderr, "%s is not a JSON array\n", path);
         return 2;
     }
+    if (corpus.n == 0) {
+        fprintf(stderr, "%s contains no corpus cases\n", path);
+        return 2;
+    }
     for (i = 0; i < corpus.n; i++) {
         const CuJson *c = &corpus.items[i];
         const CuJson *o = cu_json_find(c, cu_str_cstr("options"));
@@ -173,6 +177,13 @@ int main(int argc, char **argv)
             }
         }
         cu_temp_end(t);
+    }
+    if (nsuites == 0) {
+        cu_arena_release(&out_arena);
+        cu_arena_release(&scratch);
+        cu_arena_release(&file_arena);
+        fprintf(stderr, "corpus selection matched no cases\n");
+        return 2;
     }
     for (j = 0; j < nsuites; j++) {
         printf("%-24.*s %5lu/%lu\n", (int)suites[j].name.len, suites[j].name.ptr, suites[j].pass,

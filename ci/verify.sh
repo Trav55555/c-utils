@@ -72,6 +72,7 @@ case "$tier" in gate|deep) ;; *) echo 'usage: ci/verify.sh gate|deep' >&2; exit 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 python3 -I -m unittest discover -s "$root/tests" -p 'test_ci*.py'
 VERIFY_REQUIRE_SCOPE=1 python3 -I -m unittest discover -s "$root/tests" -p 'test_verify*.py'
+if [[ -f "$root/c-mark/Makefile" ]]; then make -C "$root/c-mark" test-tools; fi
 [[ "$(uname -s)" == Linux && "$(uname -m)" == x86_64 ]] || { echo 'CI requires Linux x86_64' >&2; exit 1; }
 : "${XDG_RUNTIME_DIR:?user systemd runtime required}"
 : "${RUNNER_TEMP:?runner scratch required}"

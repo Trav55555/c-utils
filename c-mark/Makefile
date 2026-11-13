@@ -12,7 +12,7 @@ DRIVER := $(BUILD)/mark_render
 SEED ?= 1
 N ?= 2000
 
-.PHONY: test test-core report check corpus diff-fuzz
+.PHONY: test test-core test-tools report check corpus diff-fuzz
 test: $(BUILD)/test_mark $(BUILD)/test_ext $(BUILD)/test_corpus
 	$(BUILD)/test_mark
 	$(BUILD)/test_ext
@@ -25,6 +25,10 @@ test-core: $(BUILD)/test_mark $(BUILD)/test_corpus
 	$(BUILD)/test_corpus tests/corpus.json --suite spec
 	$(BUILD)/test_corpus tests/corpus.json --suite extra
 	$(BUILD)/test_corpus tests/corpus.json --suite options
+
+# No Go dependency: validate tool failure paths and corpus selection guards.
+test-tools: $(BUILD)/test_corpus
+	C_MARK_TEST_CORPUS=$(abspath $(BUILD)/test_corpus) python3 -I -m unittest discover -s tools -p 'test_*.py'
 
 # Progress while porting: every suite's count, exit 0.
 report: $(BUILD)/test_corpus

@@ -275,6 +275,10 @@ class WorkflowTests(unittest.TestCase):
         for path in [ROOT / ".github/workflows/test.yml", ROOT / "ci/verify.sh"]:
             self.assertIn("-m unittest discover", path.read_text())
             self.assertIn("-p 'test_ci*.py'", path.read_text())
+        self.assertIn("if [ -f c-mark/Makefile ]; then make -C c-mark test-tools; fi",
+                      (ROOT / ".github/workflows/test.yml").read_text())
+        self.assertIn('if [[ -f "$root/c-mark/Makefile" ]]; then make -C "$root/c-mark" test-tools; fi',
+                      (ROOT / "ci/verify.sh").read_text())
 
 
 GATE = ["subset", "lint", "matrix", "analyzer", "sanitize", "msan", "tsan", "release", "wasm", "i386",

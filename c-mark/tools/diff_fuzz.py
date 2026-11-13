@@ -170,6 +170,10 @@ class Mismatch:
         self.note = note
 
 
+class OracleProtocolError(Exception):
+    """The oracle succeeded but did not return one HTML string per case."""
+
+
 def _one_byte_fffd(err):
     """Error handler that replaces exactly one byte, as Go's encoding/json
     does with invalid UTF-8 (Python's own handler takes the maximal invalid
@@ -229,7 +233,18 @@ class Runner:
                 json.dump(cases, f, ensure_ascii=True)
             rc, out, err = run([self.oracle, "-cases", path], b"", 600)
         if rc == 0:
-            return [s.encode("utf-8") for s in json.loads(out.decode("utf-8"))]
+            try:
+                values = json.loads(out.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise OracleProtocolError("oracle returned invalid JSON: %s" % exc) from exc
+            if not isinstance(values, list):
+                raise OracleProtocolError("oracle result must be a JSON array")
+            if len(values) != len(docs):
+                raise OracleProtocolError("oracle returned %d results for %d cases" % (len(values), len(docs)))
+            for i, value in enumerate(values):
+                if not isinstance(value, str):
+                    raise OracleProtocolError("oracle result %d must be a string" % i)
+            return [s.encode("utf-8") for s in values]
         if len(docs) == 1:
             self.oracle_errors.append((opts, docs[0], err))
             return [None]
@@ -356,6 +371,19 @@ def main():
     ap.add_argument("--shrink-max", type=int, default=20, help="mismatches to minimise per option set")
     args = ap.parse_args()
 
+    if args.count <= 0:
+        ap.error("--count must be positive")
+    if args.jobs <= 0:
+        ap.error("--jobs must be positive")
+    if args.shrink_max < 0:
+        ap.error("--shrink-max must be nonnegative")
+    names = args.sets.split(",")
+    if not names or any(not name for name in names):
+        ap.error("--sets must name at least one option set")
+    unknown = [name for name in names if name not in SET_BY_NAME]
+    if unknown:
+        ap.error("unknown option set: %s" % ", ".join(unknown))
+
     if args.replay:
         return replay(args.driver, args.replay)
     if not args.oracle:
@@ -363,11 +391,15 @@ def main():
     runner = Runner(args.oracle, args.driver, args.jobs)
     total_docs = total_bad = 0
     saved = []
-    for name in args.sets.split(","):
+    for name in names:
         opts = SET_BY_NAME[name]
         rng = random.Random("%d:%s" % (args.seed, name))
         docs = [generate(rng, opts.raw) for _ in range(args.count)]
-        bad = runner.mismatches(opts, docs)
+        try:
+            bad = runner.mismatches(opts, docs)
+        except OracleProtocolError as exc:
+            print("oracle protocol error under %s: %s" % (name, exc), file=sys.stderr)
+            return 1
         total_docs += len(docs)
         total_bad += len(bad)
         print("%-16s seed %d: %d documents, %d mismatches" % (name, args.seed, len(docs), len(bad)), flush=True)

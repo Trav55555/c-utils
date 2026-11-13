@@ -5,11 +5,13 @@
 /* c-mark: Markdown to HTML, a Dependable C port of goldmark v1.6.0
  * (github.com/yuin/goldmark, MIT, Copyright (c) 2019 Yusuke Inuzuka).
  *
- * For every input and every supported option set, the output is the byte
- * string goldmark v1.6.0 renders with the same configuration. The oracle
- * (c-mark/oracle) defines that string; the corpus and differential tests
- * check it. Where goldmark has a bug, c-mark has the same bug: the point is
- * to replace Hugo's renderer without changing a published page.
+ * The intended compatibility contract is byte-for-byte agreement with
+ * goldmark v1.6.0 for successful renders within the bounds below and the
+ * supported options. The oracle (c-mark/oracle) defines that output; the
+ * committed corpus and bounded differential runs provide finite checks of
+ * the contract, not proof for every input. Differences found against
+ * goldmark are bugs unless explicitly documented. The compatibility goal
+ * is to let Hugo replace its renderer without changing a published page.
  *
  * CU_MARK_HUGO is the configuration Hugo 0.120.4 uses by default (its
  * markup/goldmark/convert.go with goldmark_config.Default), including Hugo's
