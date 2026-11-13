@@ -80,17 +80,15 @@ static int sha1_is(CuStr data, const char *hex)
 }
 
 /* Cerberus takes minutes over what native builds run in a second, so it
- * runs every STRIDE-th stream and crafted case; every one has run clean
- * under it in full, and native, sanitizer and valgrind builds run them all. */
+ * samples streams and crafted cases; it keeps the level 9 header case
+ * explicitly. Native, sanitizer and valgrind builds run every case. */
 #ifdef __cerb__
 #define STREAM_STRIDE 6
 #define CRAFTED_STRIDE 16
-#define CRAFTED_SHA1_MAX 2
 #define PREFIX_STREAMS 2
 #else
 #define STREAM_STRIDE 1
 #define CRAFTED_STRIDE 1
-#define CRAFTED_SHA1_MAX ((size_t)-1)
 #define PREFIX_STREAMS ((size_t)-1)
 #endif
 
@@ -250,31 +248,30 @@ static void test_mutations(void)
 }
 #endif
 
-/* Streams that reach each rule about codes, lengths, distances, blocks,
- * headers and trailers, with zlib's verdict on each. Hashing an output
- * costs Cerberus about a third of a case, so it hashes the first few; the
- * rest still match zlib's length and consumed count. */
+/* Streams that reach rules about codes, lengths, distances, blocks,
+ * headers and trailers, with zlib's verdict on each. Cerberus samples the
+ * table but always checks the level 9 header and its output hash. */
 static void test_crafted(void)
 {
     CuArena a;
     CuStr out;
     size_t used;
     size_t i;
-    size_t hashed;
     int ok;
 
-    hashed = 0;
     cu_arena_init(&a);
-    for (i = 0; i < sizeof crafted / sizeof crafted[0]; i += CRAFTED_STRIDE) {
+    for (i = 0; i < sizeof crafted / sizeof crafted[0]; i++) {
+        if (i % CRAFTED_STRIDE != 0 &&
+            strcmp(crafted[i].name, "level 9 header") != 0)
+            continue;
         used = 0;
         ok = cu_zlib_inflate(&a, view(crafted[i].z, crafted[i].len), 1UL << 20, &out, &used);
         assert(ok == crafted[i].ok);
         if (ok) {
             assert(used == crafted[i].used && out.len == crafted[i].out_len);
-            if (hashed < CRAFTED_SHA1_MAX) {
+            if (CRAFTED_STRIDE == 1 ||
+                strcmp(crafted[i].name, "level 9 header") == 0)
                 assert(sha1_is(out, crafted[i].sha1));
-                hashed++;
-            }
         } else {
             assert(out.len == 0 && used == 0);
         }

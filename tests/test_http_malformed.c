@@ -77,9 +77,10 @@ static void malformed(void)
         "Host: x\r\nTransfer-Encoding: chunke, chunked",
 #endif
         "Host: x\r\nTransfer-Encoding:  ,chunked,\t, \t",
+        /* The transfer-coding list continues across field lines. */
+        "Host: x\r\nTransfer-Encoding: gzip\r\nTransfer-Encoding: chunked",
 #ifndef __cerb__
         "Host: x\r\nTransfer-Encoding: gzip , chunked \t,",
-        "Host: x\r\nTransfer-Encoding: gzip\r\nTransfer-Encoding: chunked",
         "Host: x\r\nTransfer-Encoding: chunked\r\nTransfer-Encoding: ,",
         "Host: x\r\nTransfer-Encoding:\r\nTransfer-Encoding: chunked",
 #endif
