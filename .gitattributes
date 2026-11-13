@@ -1,0 +1,3 @@
+
+# Minimized Markdown regressions preserve significant trailing whitespace.
+c-mark/tests/diff_fuzz/**/input.md whitespace=-blank-at-eol
