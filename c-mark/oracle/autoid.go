@@ -3,6 +3,7 @@
 // ASCII-only branches removed, which that setting never reaches.
 // Copyright 2019 The Hugo Authors. Licensed under the Apache License,
 // Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
+// See ../LICENSE.hugo for the complete license text.
 package main
 
 import (

@@ -61,8 +61,17 @@ Either status may leave partial output, which callers must discard.
 
 The oracle uses Goldmark v1.6.0, pinned by module checksum. Its entity and
 case-fold tables supply `mark_entities.c` and `mark_casefold.c`. Go 1.22.4
-generated `mark_unicode.c` from Unicode 15.0.0 tables. License notices are in
-`LICENSE.goldmark` and `LICENSE.go`.
+generated `mark_unicode.c` from Unicode 15.0.0 tables. The Hugo heading-ID
+implementation is a C port of the `idFactory` in Hugo's
+[`markup/goldmark/autoid.go`](https://github.com/gohugoio/hugo/blob/v0.120.4/markup/goldmark/autoid.go)
+at v0.120.4 (tag commit `f11bca5fec2ebb3a02727fb2a5cfb08da96fd9df`). The port
+removes unused Blackfriday and ASCII-only branches. `oracle/autoid.go` is the
+corresponding reduced Go copy. The 2019 Hugo Authors copyright and Apache 2.0
+terms apply to those Hugo-derived portions; the exact upstream license is
+included in `LICENSE.hugo`. The tagged tree has no NOTICE file. The repository
+MIT license continues to cover c-mark's original work and does not replace the
+third-party terms. Goldmark and Go notices remain in `LICENSE.goldmark` and
+`LICENSE.go`.
 
 The committed corpus provides finite coverage, not proof of agreement for
 every input. A fixed-seed-1 run generated 22,000 documents across 11 option
@@ -72,8 +81,21 @@ in `text.blockReader.Peek` from `parser.linkParser.Parse` on the valid UTF-8
 input `1. '\n--\n\t][]`; the oracle returns no HTML. The same input panics in
 raw Hugo mode, while plain CommonMark mode succeeds. c-mark renders it, but no
 reference output exists for comparison. The fuzzer reports the oracle error as
-a failure and does not exclude the input.
+a failure and does not exclude the input. A focused seeded check after the
+heading-ID scope change compared 128 documents each under `hugo-unsafe` and
+`goldmark-ids`: 256 comparisons, zero mismatches, and zero oracle errors.
 
-The regions check accepts the numbered heading ID path in `mark_parser.c`.
-That static result does not prove every lifetime safe or replace the native
-tests and corpus comparison.
+`c-mark` at candidate `300691b` passes its `dcheck gate` with regions
+enabled: 94.92% line coverage, with authority skipped because there is no
+`ward.toml`. This is not a Cerberus verdict. The earlier full deep run remains
+a failure for the frozen source snapshot `a74f2b6` with checker `404ddb9`:
+regions and semantics failed, while authority and CBMC were skipped. Its
+full Cerberus harnesses timed out for `test_corpus` and `test_mark` at 300
+seconds; `test_ext` hit a Cerberus frontend crash on a static aggregate
+initializer. The separate two-render smoke harness at candidate `685ea8b` also timed out
+under Cerberus after 300.08 seconds (exit 124). No completed interpreted
+render verdict is established, and no dedicated `SEMANTICS_TEST_DIR` was
+adopted.
+The native `make -C c-mark test` run passes the targeted and extension tests,
+all 1,576 corpus entries, and both smoke renders; this is separate evidence
+from Cerberus.

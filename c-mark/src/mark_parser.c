@@ -1,7 +1,11 @@
-/* goldmark parser/parser.go as C: the parse context, auto heading ids (and
- * Hugo's idFactory from markup/goldmark/autoid.go), the block driver
- * (parseBlocks, openBlocks, closeBlocks), the inline driver (parseBlock)
- * and the transformer calls. Each function names the Go function it ports. */
+/* The Hugo idFactory portion below ports markup/goldmark/autoid.go from
+ * Hugo v0.120.4 (Copyright 2019 The Hugo Authors). This modified derivative
+ * portion retains Apache-2.0 terms; see c-mark/LICENSE.hugo.
+ *
+ * The rest ports Goldmark parser/parser.go as C: the parse context, block
+ * driver (parseBlocks, openBlocks, closeBlocks), the inline driver
+ * (parseBlock) and transformer calls. Each function names the Go function
+ * it ports. */
 #include "mark_parser.h"
 #include "mark_unicode.h"
 #include "mark_util.h"
