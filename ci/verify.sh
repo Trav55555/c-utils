@@ -51,8 +51,8 @@ gate_verdict() {
 
 # The deep run's verdict and findings issue, from exit status $1, with root
 # and work as set below. The verdict needs every deep check among the passes,
-# so none can pass by being skipped. Gitea gets 20 minutes, inside the job's
-# timeout-minutes.
+# so none can pass by being skipped. The issue update has a separate
+# 20-minute deadline inside the job's timeout-minutes.
 findings() {
     local checks=() name
     for name in "${deep_required[@]}"; do checks+=(--require "$name"); done
