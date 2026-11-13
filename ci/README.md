@@ -72,9 +72,11 @@ Both tiers retain the checker profile validation, regions build, 3 GiB memory
 limit, and disabled swap, and keep their logs, plus `result.json` for the
 nightly run, as the run's artifact for 30 days. `ci/timings.py` also prints
 each check's time to the job log, and, with a toolchain that logs them, the
-slowest semantics files and any at half the per-file limit or more; the job
-log stays readable when the artifact cannot be fetched. The deep tier keeps its
-2,400-second aggregate timeout and complete deep-check workload; the gate has
+slowest semantics files and CBMC proofs and any at half the per-file limit or
+more; the job log stays readable when the artifact cannot be fetched. The deep
+tier keeps its 2,400-second aggregate timeout and complete deep-check workload,
+and runs two semantics, Valgrind or CBMC files at a time (`DCHECK_JOBS=2`): a
+Cerberus run peaks at 0.7 to 1.6 GiB, so two fit the 3 GiB limit; the gate has
 900 seconds per project. Both call the same `tools/verify_deep.py` scope runner as
 `make deep`. The scope kills all its processes at the deadline, including
 new process groups and SIGTERM-ignoring children. The runner also rejects

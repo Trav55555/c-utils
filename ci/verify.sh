@@ -58,7 +58,7 @@ findings() {
     for name in "${deep_required[@]}"; do checks+=(--require "$name"); done
     for name in "${allowed_skips[@]}"; do checks+=(--allow-skip "$name"); done
     python3 -I "$root/ci/findings.py" --result "$work/result.json" --root "$work/c-utils" \
-        "${checks[@]}" --log "$root/ci-artifacts/deep.log" --exit-status "$1" --rev "$(git -C "$root" rev-parse HEAD)" \
+        "${checks[@]}" --log "$root/ci-artifacts/deep.log" --exit-status "$1" --rev "${GITHUB_SHA:-$(git -C "$root" rev-parse HEAD)}" \
         --run-url "${GITHUB_SERVER_URL:-}/$GITHUB_REPOSITORY/actions/runs/${GITHUB_RUN_ID:-}" \
         --login "$CUTILS_CI_API_LOGIN" --repo "$GITHUB_REPOSITORY" --within 1200
 }
@@ -157,7 +157,9 @@ fi
 
 printf 'CI deep: the root project only; the gate tier checks the subprojects (%s)\n' \
     "$(subprojects "$root" | paste -sd ' ' -)"
-"$toolchain/bin/dcheck-tools" exec nice -n 15 \
+# Two semantics, Valgrind or CBMC files at a time: a Cerberus run peaks at
+# 0.7 to 1.6 GiB, so two fit the scope's 3 GiB and a third may not.
+"$toolchain/bin/dcheck-tools" exec env DCHECK_JOBS=2 nice -n 15 \
     make -j1 -C "$work/c-utils" deep DEEP_SECONDS=2400 DCHECK="$toolchain/bin/dcheck" \
     DCHECK_JSON="$work/result.json" 2>&1 | tee "$root/ci-artifacts/deep.log" || status=$?
 keep_logs "$work/c-utils" "$root/ci-artifacts"

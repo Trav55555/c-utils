@@ -45,9 +45,9 @@
 
 /* Store a + b (a * b) in *out and return 1, or return 0 if it overflows
  * size_t. *out is unchanged on overflow. */
-/** regions: borrows */
+/** regions: borrows; modifies out */
 CU_MUST_USE int cu_size_add(size_t a, size_t b, size_t *out);
-/** regions: borrows */
+/** regions: borrows; modifies out */
 CU_MUST_USE int cu_size_mul(size_t a, size_t b, size_t *out);
 
 /* ---- 64-bit unsigned integers ------------------------------------------ */
@@ -136,11 +136,11 @@ void cu_arena_release(CuArena *a);
 /* Uninitialised memory for count elements of elem_size bytes, aligned for any
  * type. Returns NULL and marks the arena failed if count * elem_size
  * overflows or memory runs out. A zero-size push returns a non-NULL pointer. */
-/** regions: returns alloc(a) */
+/** regions: returns fresh(a); modifies arena(a) */
 CU_MUST_USE void *cu_arena_push(CuArena *a, size_t count, size_t elem_size);
 
 /* Uninitialised bytes with no alignment. Same failure rules as cu_arena_push. */
-/** regions: returns alloc(a) */
+/** regions: returns fresh(a); modifies arena(a) */
 CU_MUST_USE char *cu_arena_push_bytes(CuArena *a, size_t n);
 
 #define CU_PUSH(a, T, n) ((T *)cu_arena_push((a), (n), sizeof(T)))
@@ -168,7 +168,7 @@ CU_MUST_USE char *cu_arena_push_bytes(CuArena *a, size_t n);
  * before the innermost temp scope is never grown in place or reallocated
  * (nor is the block that scope began in), so ending the scope frees exactly
  * what was pushed in it. old_size 0 always gets a new push. */
-/** regions: returns alloc(a); requires p in a */
+/** regions: returns alloc(a); requires p in a; modifies arena(a) */
 CU_MUST_USE void *cu_arena_grow(CuArena *a, void *p, size_t old_size, size_t new_size);
 
 /* Grows p (old_size bytes from a, not NULL) to new_size bytes in place, as
@@ -176,7 +176,7 @@ CU_MUST_USE void *cu_arena_grow(CuArena *a, void *p, size_t old_size, size_t new
  * changing nothing, when that is not possible. It never allocates, moves
  * or frees. A new_size of at most old_size returns 1; old_size 0 returns
  * 0. CuBuilder grows this way or with a new push, never by realloc. */
-/** regions: borrows */
+/** regions: borrows; requires p in a; modifies arena(a) */
 CU_MUST_USE int cu_arena_extend(CuArena *a, void *p, size_t old_size, size_t new_size);
 
 /** regions: borrows */
@@ -329,6 +329,7 @@ CU_MUST_USE int cu_parse_long(CuStr s, unsigned base, long *out);
 /* Appends never fail loudly: a failure marks the builder, later appends are
  * skipped, and cu_sb_finish reports it. Memory comes from the arena; append
  * only under the temp scope the builder was initialised in. */
+/** regions: invariant data in arena */
 typedef struct CuBuilder {
     CuArena *arena;
     char *data;
@@ -471,6 +472,7 @@ void cu_sha1(CuStr data, unsigned char digest[20]);
  * and the data field, are valid only until the next push or reserve.
  * Pushing a pointer to one of the vector's own elements is allowed. Push
  * and reserve only under the temp scope the vector was initialised in. */
+/** regions: invariant data in arena */
 typedef struct CuVec {
     CuArena *arena;
     char *data;
