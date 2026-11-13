@@ -13,10 +13,11 @@ SEED ?= 1
 N ?= 2000
 
 .PHONY: test test-core test-tools report check corpus diff-fuzz
-test: $(BUILD)/test_mark $(BUILD)/test_ext $(BUILD)/test_corpus
+test: $(BUILD)/test_mark $(BUILD)/test_ext $(BUILD)/test_corpus $(BUILD)/test_semantics
 	$(BUILD)/test_mark
 	$(BUILD)/test_ext
 	$(BUILD)/test_corpus tests/corpus.json
+	$(BUILD)/test_semantics
 
 # What the core port covers: the targeted tests and the corpus suites that
 # need no extension (the runner exits 1 on any failure in a selected suite).
@@ -35,6 +36,10 @@ report: $(BUILD)/test_corpus
 	$(BUILD)/test_corpus tests/corpus.json --report
 
 $(BUILD)/test_%: tests/test_%.c $(MARKSRC) $(MARKHDR) ../include/cu.h $(LIBSRC) | $(BUILD)
+	$(CC) $(STRICT) $(CFLAGS) $(DEFINES) -Iinclude -Isrc -I../include -o $@ $< $(MARKSRC) $(LIBSRC)
+
+# Dedicated Cerberus renders are also part of the ordinary native test run.
+$(BUILD)/test_semantics: semantics/render_semantics.c $(MARKSRC) $(MARKHDR) ../include/cu.h $(LIBSRC) | $(BUILD)
 	$(CC) $(STRICT) $(CFLAGS) $(DEFINES) -Iinclude -Isrc -I../include -o $@ $< $(MARKSRC) $(LIBSRC)
 
 # The reference renderer (Go, goldmark v1.6.0 pinned by go.sum) and the
