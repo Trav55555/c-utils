@@ -31,6 +31,7 @@ int main(void)
 
 #include <sys/stat.h>
 #include <unistd.h>
+#include "tmpdir.h"
 
 static char root[512];
 
@@ -319,15 +320,9 @@ static void next_null_entry(void)
 
 int main(void)
 {
-    const char *dir;
     int debug;
 
-    dir = getenv("TMPDIR");
-    if (dir == NULL || dir[0] == '\0')
-        dir = "/tmp";
-    assert(strlen(dir) < sizeof root - 32);
-    sprintf(root, "%s/cu-dir-test", dir);
-    assert(mkdir(root, 0700) == 0);
+    tmpdir_make(root, sizeof root - 32, "cu-dir-test");
     for (debug = 0; debug <= 1; debug++) {
         test_empty(debug);
         test_kinds(debug);
@@ -340,7 +335,7 @@ int main(void)
     expect_abort(open_null_path);
     expect_abort(next_null_entry);
 #endif
-    assert(rmdir(root) == 0);
+    tmpdir_remove(root);
     return 0;
 }
 #endif

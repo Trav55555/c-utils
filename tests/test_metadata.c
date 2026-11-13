@@ -48,6 +48,7 @@ int main(void)
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include "tmpdir.h"
 
 static char root[512];
 static const char original[] = {'a', 'b', '\0', 'c', '\xff', '\n'};
@@ -301,18 +302,7 @@ static void test_other(void)
 
 int main(void)
 {
-    const char *tmp;
-    unsigned i;
-
-    tmp = getenv("TMPDIR");
-    if (tmp == NULL || tmp[0] == '\0') tmp = "/tmp";
-    assert(strlen(tmp) < sizeof(root) - 40);
-    for (i = 0; i < 1000; i++) {
-        assert(sprintf(root, "%s/cu-info-test-%u", tmp, i) > 0);
-        if (mkdir(root, 0700) == 0) break;
-        assert(errno == EEXIST);
-    }
-    assert(i < 1000);
+    tmpdir_make(root, sizeof(root) - 40, "cu-info-test");
     test_paths();
     test_dir_relative();
     test_open_object();
@@ -320,7 +310,7 @@ int main(void)
 #ifndef __wasi__
     test_other();
 #endif
-    assert(rmdir(root) == 0);
+    tmpdir_remove(root);
     return 0;
 }
 #endif

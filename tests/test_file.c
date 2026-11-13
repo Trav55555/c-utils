@@ -1,4 +1,5 @@
 #include "death.h"
+#include "tmpdir.h"
 #include <assert.h>
 #include <errno.h>
 #include <stdio.h>
@@ -6,16 +7,14 @@
 #include <string.h>
 #include "cu.h"
 
-/* Test files go in TMPDIR (dcheck gives wasm tests one too), else /tmp. */
+static char root[512];
+
+/* Test files go in a fresh directory under TMPDIR (dcheck gives wasm tests
+ * one too), else /tmp. */
 static void temp_path(char *path, size_t cap, const char *name)
 {
-    const char *dir;
-
-    dir = getenv("TMPDIR");
-    if (dir == NULL || dir[0] == '\0')
-        dir = "/tmp";
-    assert(strlen(dir) + strlen(name) + 16 < cap);
-    sprintf(path, "%s/cu-file-test-%s", dir, name);
+    assert(strlen(root) + strlen(name) + 16 < cap);
+    sprintf(path, "%s/cu-file-test-%s", root, name);
 }
 
 static void write_file(const char *path, const char *data, size_t n)
@@ -53,7 +52,7 @@ static void test_read_file(int debug)
 #else
     static const size_t sizes[] = {0, 1, 4095, 4096, 4097, 200000};
 #endif
-    char path[512];
+    char path[600];
     CuArena a;
     CuStr s;
     char *data;
@@ -81,7 +80,7 @@ static void test_read_file(int debug)
 
 static void test_missing_file(void)
 {
-    char path[512];
+    char path[600];
     CuArena a;
     CuStr s;
 
@@ -136,7 +135,7 @@ static void test_read_stream(int debug)
     static const size_t sizes[] = {0, 5, 4096, 4097, 70000};
     static const size_t allocations[] = {1, 1, 2, 2, 6};
 #endif
-    char path[512];
+    char path[600];
     CuArena a;
     CuStr s;
     FILE *f;
@@ -177,7 +176,7 @@ static void test_read_stream(int debug)
  * empty, the arena is marked, and the file is still closed (no leak). */
 static void test_read_fails_at_every_allocation(int debug, int stream)
 {
-    char path[512];
+    char path[600];
     CuArena a;
     CuStr s;
     char *data;
@@ -219,7 +218,7 @@ static void test_read_fails_at_every_allocation(int debug, int stream)
  * failure, and distinguishes an I/O error from an allocation failure. */
 static void test_stream_position_and_error(void)
 {
-    char path[512];
+    char path[600];
     CuArena a;
     CuStr s;
     FILE *f;
@@ -248,7 +247,7 @@ static void test_stream_position_and_error(void)
  * arena limit. Falling back to a large stream buffer would fail here. */
 static void test_small_file_limit(void)
 {
-    char path[512];
+    char path[600];
     CuArena a;
     CuStr s;
 
@@ -301,6 +300,7 @@ int main(void)
 {
     int debug;
 
+    tmpdir_make(root, sizeof root - 32, "cu-file-test");
     for (debug = 0; debug <= 1; debug++) {
         test_read_file(debug);
         test_read_stream(debug);
@@ -314,5 +314,6 @@ int main(void)
 #ifdef CU_DEATH_TESTS
     death_tests();
 #endif
+    tmpdir_remove(root);
     return 0;
 }

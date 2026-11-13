@@ -1,6 +1,7 @@
 /* Inject a failed size query or rewind into the real file reader. These
  * stdio failures must not turn a nonempty file into a successful empty
  * result, or silently discard its contents. */
+#include "tmpdir.h"
 #include <assert.h>
 #include <errno.h>
 #include <stdio.h>
@@ -78,18 +79,15 @@ CU_MUST_USE int stream_read_probe(CuArena *a, FILE *f, CuStr *out);
 
 int main(void)
 {
-    const char *dir;
-    char path[512];
+    char root[512];
+    char path[600];
     FILE *f;
     CuArena a;
     CuStr s;
     size_t i;
 
-    dir = getenv("TMPDIR");
-    if (dir == NULL || dir[0] == '\0')
-        dir = "/tmp";
-    assert(strlen(dir) < sizeof path - 32);
-    sprintf(path, "%s/cu-file-seek-test", dir);
+    tmpdir_make(root, sizeof root - 32, "cu-file-seek-test");
+    sprintf(path, "%s/cu-file-seek-test", root);
     f = fopen(path, "wb");
     assert(f != NULL);
     assert(fwrite("contents", 1, 8, f) == 8);
@@ -144,5 +142,6 @@ int main(void)
     assert(fclose(f) == 0);
     cu_arena_release(&a);
     assert(remove(path) == 0);
+    tmpdir_remove(root);
     return 0;
 }

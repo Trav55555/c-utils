@@ -30,6 +30,7 @@ int main(void)
 #else
 
 #include <sys/types.h>
+#include "tmpdir.h"
 
 static char root[512];
 
@@ -356,14 +357,7 @@ static void death_tests(void)
 
 int main(void)
 {
-    const char *dir;
-
-    dir = getenv("TMPDIR");
-    if (dir == NULL || dir[0] == '\0')
-        dir = "/tmp";
-    assert(strlen(dir) < sizeof root - 32);
-    sprintf(root, "%s/cu-append-test", dir);
-    assert(cu_dir_make(root));
+    tmpdir_make(root, sizeof root - 32, "cu-append-test");
     test_write_and_reopen();
     test_large_write();
     test_truncate();
@@ -378,7 +372,7 @@ int main(void)
 #ifdef CU_DEATH_TESTS
     death_tests();
 #endif
-    assert(remove(root) == 0);
+    tmpdir_remove(root);
     return 0;
 }
 #endif

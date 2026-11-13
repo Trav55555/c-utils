@@ -1,4 +1,5 @@
 #include "death.h"
+#include "tmpdir.h"
 #include <assert.h>
 #include <errno.h>
 #include <stdio.h>
@@ -6,7 +7,8 @@
 #include <string.h>
 #include "cu.h"
 
-static char path[512];
+static char root[512];
+static char path[600];
 static int reads;
 static int closes;
 static int injected_read_error;
@@ -385,13 +387,8 @@ static void read_null_count(void)
 
 int main(void)
 {
-    const char *dir;
-
-    dir = getenv("TMPDIR");
-    if (dir == NULL || dir[0] == '\0')
-        dir = "/tmp";
-    assert(strlen(dir) < sizeof path - 32);
-    sprintf(path, "%s/cu-input-test", dir);
+    tmpdir_make(root, sizeof root - 32, "cu-input-test");
+    sprintf(path, "%s/cu-input-test", root);
     test_chunks();
     test_borrowed();
     test_failed_open();
@@ -411,5 +408,6 @@ int main(void)
     expect_abort(read_null_count);
 #endif
     assert(remove(path) == 0);
+    tmpdir_remove(root);
     return 0;
 }

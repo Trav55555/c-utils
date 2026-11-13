@@ -62,7 +62,7 @@ fuzz-smoke:
 		$(FUZZ_CC) $(FUZZ_FLAGS) -Iinclude -Ic-mark/include -Ic-mark/src -o "$(BUILD)/fuzz/fuzz_mark" $$f c-mark/src/*.c src/*.c; \
 		run fuzz_mark c-mark/fuzz/fuzz_mark.seeds; done
 
-$(BUILD)/test_%: tests/test_%.c tests/death.h tests/align.h include/cu.h $(wildcard src/*.c) | $(BUILD)
+$(BUILD)/test_%: tests/test_%.c tests/death.h tests/align.h tests/tmpdir.h include/cu.h $(wildcard src/*.c) | $(BUILD)
 	$(CC) $(STRICT) $(CFLAGS) -Iinclude -o $@ $< $(wildcard src/*.c)
 
 $(BUILD):
