@@ -20,11 +20,11 @@ concurrency:
 
 jobs:
   # A scheduled run builds only a commit that has no nightly result yet. This
-  # check runs on the CI pool, so a night with nothing new never wakes the
-  # build host: its job is skipped, not queued.
+  # check uses the existing local runner too; it does not depend on the
+  # cloud runner pool. The deep job is skipped when nothing new needs checking.
   unbuilt:
     if: github.event_name == 'schedule' && vars.CUTILS_CI_REPOSITORY != '' && github.repository == vars.CUTILS_CI_REPOSITORY
-    runs-on: ci-arm64
+    runs-on: ${{ vars.CUTILS_CI_RUNNER }}
     timeout-minutes: 5
     outputs:
       build: ${{ steps.check.outputs.build }}

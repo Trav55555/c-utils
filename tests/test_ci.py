@@ -211,7 +211,7 @@ class WorkflowTests(unittest.TestCase):
     def test_scheduled_runs_build_only_an_unbuilt_head(self):
         text = (ROOT / ".gitea/workflows/ci.yml").read_text()
         self.assertIn("  unbuilt:\n    if: github.event_name == 'schedule' && vars.CUTILS_CI_REPOSITORY != '' && "
-                      "github.repository == vars.CUTILS_CI_REPOSITORY\n    runs-on: ci-arm64\n", text)
+                      "github.repository == vars.CUTILS_CI_REPOSITORY\n    runs-on: ${{ vars.CUTILS_CI_RUNNER }}\n", text)
         self.assertIn("  verify:\n    needs: unbuilt\n", text)
         self.assertIn("'c-utils nightly'; then\n            echo build=false", text)
         self.assertIn("- name: Record the nightly result on the commit\n        if: always() && github.event_name != 'push'\n", text)
