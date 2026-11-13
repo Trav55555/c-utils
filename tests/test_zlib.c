@@ -84,11 +84,13 @@ static int sha1_is(CuStr data, const char *hex)
  * under it in full, and native, sanitizer and valgrind builds run them all. */
 #ifdef __cerb__
 #define STREAM_STRIDE 6
-#define CRAFTED_STRIDE 8
+#define CRAFTED_STRIDE 16
+#define CRAFTED_SHA1_MAX 2
 #define PREFIX_STREAMS 2
 #else
 #define STREAM_STRIDE 1
 #define CRAFTED_STRIDE 1
+#define CRAFTED_SHA1_MAX ((size_t)-1)
 #define PREFIX_STREAMS ((size_t)-1)
 #endif
 
@@ -101,10 +103,12 @@ static CuStr view(const unsigned char *p, size_t n)
  * sums reduced in time: with 32-bit sums, about 5800 of them overflow b.
  * Cerberus runs the shortest run that does. */
 #ifdef __cerb__
+#define ADLER_SPLIT_FIRST 3000
 #define FF_LEN 6000
 #define FF_SUM 0xA49759EAUL
 #define FF_SUM_HIGH 0x75B659E8UL
 #else
+#define ADLER_SPLIT_FIRST 0
 #define FF_LEN 100000
 #define FF_SUM 0x149A302CUL
 #define FF_SUM_HIGH 0x072C302AUL
@@ -123,8 +127,9 @@ static void test_adler32(void)
     assert(cu_adler32(1, CU_LIT("Wikipedia")) == 0x11E60398UL);
     assert(cu_adler32(1, view(ff, sizeof ff)) == FF_SUM);
     assert(cu_adler32(0xFFF0FFF0UL, view(ff, sizeof ff)) == FF_SUM_HIGH);
-    /* Continuing a sum is the same as one sum over both parts. */
-    for (i = 0; i <= 6000; i += 3000)
+    /* Continuing a sum is the same as one sum over both parts. Cerberus
+     * splits once, at 3000; native builds also try the empty parts. */
+    for (i = ADLER_SPLIT_FIRST; i <= 6000; i += 3000)
         assert(cu_adler32(cu_adler32(1, view(ff, i)), view(ff + i, sizeof ff - i)) == FF_SUM);
 }
 
@@ -246,25 +251,33 @@ static void test_mutations(void)
 #endif
 
 /* Streams that reach each rule about codes, lengths, distances, blocks,
- * headers and trailers, with zlib's verdict on each. */
+ * headers and trailers, with zlib's verdict on each. Hashing an output
+ * costs Cerberus about a third of a case, so it hashes the first few; the
+ * rest still match zlib's length and consumed count. */
 static void test_crafted(void)
 {
     CuArena a;
     CuStr out;
     size_t used;
     size_t i;
+    size_t hashed;
     int ok;
 
+    hashed = 0;
     cu_arena_init(&a);
     for (i = 0; i < sizeof crafted / sizeof crafted[0]; i += CRAFTED_STRIDE) {
         used = 0;
         ok = cu_zlib_inflate(&a, view(crafted[i].z, crafted[i].len), 1UL << 20, &out, &used);
         assert(ok == crafted[i].ok);
-        if (ok)
-            assert(used == crafted[i].used && out.len == crafted[i].out_len &&
-                   sha1_is(out, crafted[i].sha1));
-        else
+        if (ok) {
+            assert(used == crafted[i].used && out.len == crafted[i].out_len);
+            if (hashed < CRAFTED_SHA1_MAX) {
+                assert(sha1_is(out, crafted[i].sha1));
+                hashed++;
+            }
+        } else {
             assert(out.len == 0 && used == 0);
+        }
     }
     cu_arena_release(&a);
 }
@@ -272,9 +285,9 @@ static void test_crafted(void)
 /* A match one byte too far back would copy the byte before the output.
  * Whatever that byte is, the stream is refused, even with a trailer that
  * matches what such a copy would give. Cerberus, which looks for undefined
- * behaviour rather than this off-by-one, tries three of the bytes. */
+ * behaviour rather than this off-by-one, tries the two extreme bytes. */
 #ifdef __cerb__
-#define TOO_FAR_STEP 127
+#define TOO_FAR_STEP 255
 #else
 #define TOO_FAR_STEP 1
 #endif
