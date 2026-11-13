@@ -224,7 +224,7 @@ CuTemp cu_temp_begin(CuArena *a);
 void cu_temp_end(CuTemp t);
 /* The id of the innermost temp scope open on a or, with none open, of the
  * arena's base scope, which each release replaces. Never 0. */
-/** regions: borrows */
+/** regions: borrows; modifies none */
 size_t cu_arena_scope(const CuArena *a);
 
 /* Per-thread scratch arenas. Returns a scope on a scratch arena that is not
@@ -340,7 +340,7 @@ typedef struct CuBuilder {
     int shared; /* a view from cu_sb_finish may point into data */
 } CuBuilder;
 
-/** regions: binds b to a */
+/** regions: binds b to a; modifies b */
 void cu_sb_init(CuBuilder *b, CuArena *a);
 /** regions: allocates in b */
 void cu_sb_str(CuBuilder *b, CuStr s);
