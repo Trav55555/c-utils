@@ -160,7 +160,7 @@ printf 'CI deep: the root project only; the gate tier checks the subprojects (%s
 # Two semantics, Valgrind or CBMC files at a time: a Cerberus run peaks at
 # 0.7 to 1.6 GiB, so two fit the scope's 3 GiB and a third may not.
 "$toolchain/bin/dcheck-tools" exec env DCHECK_JOBS=2 nice -n 15 \
-    make -j1 -C "$work/c-utils" deep DEEP_SECONDS=2400 DCHECK="$toolchain/bin/dcheck" \
+    make -j1 -C "$work/c-utils" deep DEEP_SECONDS=6000 DCHECK="$toolchain/bin/dcheck" \
     DCHECK_JSON="$work/result.json" 2>&1 | tee "$root/ci-artifacts/deep.log" || status=$?
 keep_logs "$work/c-utils" "$root/ci-artifacts"
 cp "$work/result.json" "$root/ci-artifacts/" 2>/dev/null || true

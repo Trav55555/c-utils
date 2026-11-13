@@ -255,6 +255,15 @@ class WorkflowTests(unittest.TestCase):
         # The lock is held until the findings issue is kept.
         self.assertNotIn("exec 9>&-", text)
 
+    def test_local_deep_budget_fits_the_job(self):
+        script = (ROOT / "ci/verify.sh").read_text()
+        workflow = (ROOT / ".gitea/workflows/ci.yml").read_text()
+        deep = int(re.search(r"deep DEEP_SECONDS=(\d+)", script).group(1))
+        reporting = int(re.search(r"--within (\d+)", script).group(1))
+        job = int(re.search(r"    timeout-minutes: (\d+)", workflow.split("  verify:\n", 1)[1]).group(1)) * 60
+        self.assertGreaterEqual(deep, 6000)
+        self.assertGreaterEqual(job, deep + reporting + 1800)
+
     def test_gate_runs_each_subproject_after_the_root(self):
         text = (ROOT / "ci/verify.sh").read_text()
         root_gate = text.index('gate_project "$work/c-utils" "$root/ci-artifacts"')

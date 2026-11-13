@@ -75,10 +75,14 @@ nightly run, as the run's artifact for 30 days. `ci/timings.py` also prints
 each check's time to the job log, and, with a toolchain that logs them, the
 slowest semantics files and CBMC proofs and any at half the per-file limit or
 more; the job log stays readable when the artifact cannot be fetched. The deep
-tier keeps its 2,400-second aggregate timeout and complete deep-check workload,
-and runs two semantics, Valgrind or CBMC files at a time (`DCHECK_JOBS=2`): a
+tier allows 6,000 seconds of aggregate time for the complete deep-check workload
+on the shared local host, and runs two semantics, Valgrind or CBMC files at a time (`DCHECK_JOBS=2`): a
 Cerberus run peaks at 0.7 to 1.6 GiB, so two fit the 3 GiB limit; the gate has
-900 seconds per project. Both call the same `tools/verify_deep.py` scope runner as
+900 seconds per project. The job allows 150 minutes, including up to 20
+minutes for the findings issue and 30 minutes for setup and artifacts. The local
+runner timeout must be at least 150 minutes; provision it at 155 minutes.
+These deadlines preserve per-check limits and workload; they do not reserve CPU.
+Both call the same `tools/verify_deep.py` scope runner as
 `make deep`. The scope kills all its processes at the deadline, including
 new process groups and SIGTERM-ignoring children. The runner also rejects
 leftover children after a successful checker exit. Public workflow tests report

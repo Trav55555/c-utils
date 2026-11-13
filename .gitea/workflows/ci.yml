@@ -62,11 +62,12 @@ jobs:
       github.actor == vars.CUTILS_CI_ACTOR))
     # A push gate runs on CUTILS_CI_RUNNER. The deep tier runs on
     # CUTILS_CI_DEEP_RUNNER when set, a host kept free of other load so the
-    # 2,400-second deadline measures the checks, else on CUTILS_CI_RUNNER.
+    # deadline measures the checks, else on CUTILS_CI_RUNNER.
     runs-on: ${{ github.event_name != 'push' && vars.CUTILS_CI_DEEP_RUNNER || vars.CUTILS_CI_RUNNER }}
-    # A deep run (at most 40 minutes), or a gate run waiting behind one. The
-    # gate takes minutes per project, at most 15 each.
-    timeout-minutes: 120
+    # The deep scope has 100 minutes; findings can use 20 more. Leave
+    # 30 minutes for setup, artifacts and cleanup. The local runner must
+    # allow at least 150 minutes too.
+    timeout-minutes: 150
     env:
       CUTILS_CI_API_LOGIN: ${{ vars.CUTILS_CI_API_LOGIN }}
       CUTILS_CI_TOOLCHAIN_REPOSITORY: ${{ vars.CUTILS_CI_TOOLCHAIN_REPOSITORY }}
