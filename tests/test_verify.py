@@ -22,7 +22,7 @@ SPEC.loader.exec_module(VERIFY)
 class RunnerTests(unittest.TestCase):
     def test_scope_limits_and_literal_arguments(self):
         command = ["checker path", "deep", "; not a shell"]
-        for seconds in [1800, 2400]:
+        for seconds in [1800, 6000]:
             argv = VERIFY.scope_command("test.scope", seconds, command)
             for value in ["MemoryMax=3G", "MemorySwapMax=0", "RuntimeMaxSec=" + str(seconds), "KillSignal=SIGKILL"]:
                 self.assertIn(value, argv)
@@ -74,14 +74,14 @@ class RunnerTests(unittest.TestCase):
                     ScopeTests.setUpClass()
 
     def test_make_forwards_local_and_ci_budgets(self):
-        for settings, seconds in [([], "1800"), (["DEEP_SECONDS=2400"], "2400")]:
+        for settings, seconds in [([], "1800"), (["DEEP_SECONDS=6000"], "6000")]:
             result = subprocess.run(["make", "--no-print-directory", "-n", "-C", str(ROOT),
                                      "deep", "DCHECK=checker", *settings],
                                     capture_output=True, text=True, timeout=5)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn('--seconds "' + seconds + '" -- "checker" deep', result.stdout)
         ci = (ROOT / "ci/verify.sh").read_text()
-        self.assertIn("deep DEEP_SECONDS=2400", ci)
+        self.assertIn("deep DEEP_SECONDS=6000", ci)
         self.assertIn("VERIFY_REQUIRE_SCOPE=1", ci)
 
     def test_bad_arguments_never_start_a_command(self):
