@@ -60,7 +60,10 @@ jobs:
       ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
       vars.CUTILS_CI_ACTOR != '' &&
       github.actor == vars.CUTILS_CI_ACTOR))
-    runs-on: ${{ vars.CUTILS_CI_RUNNER }}
+    # A push gate runs on CUTILS_CI_RUNNER. The deep tier runs on
+    # CUTILS_CI_DEEP_RUNNER when set, a host kept free of other load so the
+    # 2,400-second deadline measures the checks, else on CUTILS_CI_RUNNER.
+    runs-on: ${{ github.event_name != 'push' && vars.CUTILS_CI_DEEP_RUNNER || vars.CUTILS_CI_RUNNER }}
     # A deep run (at most 40 minutes), or a gate run waiting behind one. The
     # gate takes minutes per project, at most 15 each.
     timeout-minutes: 120

@@ -19,6 +19,7 @@ workflow:
 | `CUTILS_CI_REPOSITORY` | Exact trusted repository, in `owner/repository` form |
 | `CUTILS_CI_ACTOR` | Exact trusted push and manual-run actor |
 | `CUTILS_CI_RUNNER` | Label of the repository-scoped Linux x86-64 host runner |
+| `CUTILS_CI_DEEP_RUNNER` | Optional label of the runner for the deep tier (nightly and manual runs); unset, the deep tier uses `CUTILS_CI_RUNNER` |
 | `CUTILS_CI_API_LOGIN` | Existing `tea` login profile on that runner |
 | `CUTILS_CI_TOOLCHAIN_REPOSITORY` | Private toolchain repository, in `owner/repository` form |
 

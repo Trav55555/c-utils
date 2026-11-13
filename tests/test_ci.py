@@ -199,7 +199,10 @@ class WorkflowTests(unittest.TestCase):
                     "vars.CUTILS_CI_ACTOR != '' && "
                     "github.actor == vars.CUTILS_CI_ACTOR))")
         self.assertEqual(actual, expected)
-        self.assertIn("runs-on: ${{ vars.CUTILS_CI_RUNNER }}", text)
+        # Push gates on the shared runner; the deep tier on its own runner
+        # when one is configured, else the shared one.
+        self.assertIn("runs-on: ${{ github.event_name != 'push' && vars.CUTILS_CI_DEEP_RUNNER"
+                      " || vars.CUTILS_CI_RUNNER }}", text)
         for key in SETTINGS:
             self.assertIn(key + ": ${{ vars." + key + " }}", text)
         self.assertIn("persist-credentials: false", text)
