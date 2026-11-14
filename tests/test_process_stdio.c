@@ -49,6 +49,7 @@ int main(void)
 }
 #else
 #include "death.h"
+#include "tmpdir.h"
 #include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
@@ -57,6 +58,22 @@ int main(void)
 #include <unistd.h>
 
 static char helper[] = "--stdio-child";
+static char temp_root[4000];
+
+static FILE *temp_stream(void)
+{
+    char path[4096];
+    int fd;
+    FILE *stream;
+
+    sprintf(path, "%s/stream-XXXXXX", temp_root);
+    fd = mkstemp(path);
+    assert(fd >= 0);
+    assert(unlink(path) == 0);
+    stream = fdopen(fd, "w+b");
+    assert(stream != NULL);
+    return stream;
+}
 /* These are input and comparison fixtures, not the helper's output buffers. */
 static const unsigned char input_bytes[] = { 0x41, 0, 0xe3, 0x19, 0x0a, 0x7f, 0x42 };
 static const unsigned char stdout_bytes[] = { 'O', 0, 'u', 't', 0xfe, '\n' };
@@ -216,7 +233,7 @@ static void regular(const char *path, int merged, int close_sources)
     int i;
 
     for (i = 0; i < 3; ++i) {
-        files[i] = tmpfile();
+        files[i] = temp_stream();
         assert(files[i] != NULL);
         fd[i] = fileno(files[i]);
         assert(fd[i] >= 3);
@@ -267,7 +284,7 @@ static void isolated_body(const char *path, int which)
 
     (void)alarm(12);
     for (i = 0; i < 3; ++i) {
-        files[i] = tmpfile();
+        files[i] = temp_stream();
         assert(files[i] != NULL);
         fd[i] = fileno(files[i]);
         assert(fd[i] >= 3);
@@ -395,7 +412,7 @@ static void closed_later(const char *path)
     int saved;
     int field;
 
-    file = tmpfile();
+    file = temp_stream();
     assert(file != NULL);
     missing = dup(fileno(file));
     assert(missing >= 3 && close(missing) == 0);
@@ -487,6 +504,7 @@ int main(int argc, char **argv)
     if (argc == 3 && strcmp(argv[1], helper) == 0)
         return child(argv[2]);
     assert(argc > 0 && argv[0] != NULL);
+    tmpdir_make(temp_root, sizeof temp_root - 32, "cu-process-stdio-test");
     (void)alarm(60);
     regular(argv[0], 0, 0);
     regular(argv[0], 0, 1);
@@ -500,6 +518,7 @@ int main(int argc, char **argv)
     for (invalid_case = 0; invalid_case < 5; ++invalid_case)
         expect_abort(invalid);
 #endif
+    tmpdir_remove(temp_root);
     (void)alarm(0);
     return 0;
 }
