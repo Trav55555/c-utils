@@ -32,6 +32,7 @@ static size_t max_alignment(void)
     return most;
 }
 
+/** regions: borrows */
 static int is_max_aligned(const void *p)
 {
     return (size_t)p % max_alignment() == 0;

@@ -311,54 +311,67 @@ static int has_pattern(const char *p, size_t n)
     return 1;
 }
 
-/* The newest allocation grows into the rest of its block: same pointer,
- * no block allocation, nothing more held. */
+/* The newest allocation grows into the rest of its block: same address,
+ * no block allocation, nothing more held. A grow consumes its pointer, so
+ * the address is checked against base, an earlier allocation in the same
+ * block, rather than against p after the call. */
 static void test_grow_in_place(void)
 {
     CuArena a;
+    char *base;
     char *p;
     char *q;
+    char *r;
+    size_t off;
     size_t held;
     size_t attempts;
 
     cu_arena_init_with(&a, 64, 0);
-    assert(cu_arena_push_bytes(&a, 3) != NULL);
+    base = cu_arena_push_bytes(&a, 3);
+    assert(base != NULL);
     p = (char *)cu_arena_push(&a, 1, 16);
     assert(p != NULL);
     fill_pattern(p, 16);
+    off = (size_t)(p - base);
     held = a.held;
     attempts = a.attempts;
     q = (char *)cu_arena_grow(&a, p, 16, 40);
-    assert(q == p && has_pattern(q, 16));
+    assert(q == base + off && has_pattern(q, 16));
     assert(a.held == held && a.attempts == attempts);
     /* The grown bytes are taken: the next push lands after them. */
-    q = cu_arena_push_bytes(&a, 1);
-    assert(q == p + 40);
-    /* Not growing returns p unchanged. */
-    assert(cu_arena_grow(&a, q, 1, 1) == q);
-    assert(cu_arena_grow(&a, p, 40, 8) == p);
+    r = cu_arena_push_bytes(&a, 1);
+    assert(r == q + 40);
+    /* Not growing returns the pointer unchanged. */
+    assert(cu_arena_grow(&a, r, 1, 1) == base + off + 40);
+    assert(cu_arena_grow(&a, q, 40, 8) == base + off);
     assert(!cu_arena_failed(&a));
     cu_arena_release(&a);
 }
 
 /* An allocation that is not the newest one moves: a new push, a copy, and
- * the old bytes stay where they were. */
+ * the old bytes stay held. later fills the block, so the push takes a new
+ * block: one attempt and at least the 24 bytes more held, where growing in
+ * place takes no attempt and reallocating adds only the 8 bytes grown. */
 static void test_grow_moves_when_not_newest(int debug)
 {
     CuArena a;
     char *p;
     char *q;
     char *later;
+    size_t held;
+    size_t attempts;
 
     cu_arena_init_with(&a, 64, debug);
     p = cu_arena_push_bytes(&a, 16);
-    later = cu_arena_push_bytes(&a, 4);
+    later = cu_arena_push_bytes(&a, 40);
     assert(p != NULL && later != NULL);
     fill_pattern(p, 16);
     memcpy(later, "keep", 4);
+    held = a.held;
+    attempts = a.attempts;
     q = (char *)cu_arena_grow(&a, p, 16, 24);
-    assert(q != NULL && q != p && is_max_aligned(q));
-    assert(has_pattern(q, 16) && has_pattern(p, 16));
+    assert(q != NULL && is_max_aligned(q) && has_pattern(q, 16));
+    assert(a.attempts == attempts + 1 && a.held >= held + 24);
     assert(memcmp(later, "keep", 4) == 0);
     /* NULL with old size 0 is a plain push. */
     q = (char *)cu_arena_grow(&a, NULL, 0, 8);
@@ -398,45 +411,63 @@ static void test_grow_reallocates_own_block(int debug)
 
 /* Memory pushed before the innermost temp scope began is never grown in
  * place, so ending the scope cannot free part of it; it moves into the
- * scope instead. After that scope ends it grows in place again. */
+ * scope instead. After that scope ends it grows in place again. A grow
+ * consumes its pointer, so addresses are checked against base, an earlier
+ * allocation in the same block, and pointers are not used after their
+ * grow. */
 static void test_grow_respects_temp_scopes(void)
 {
     CuArena a;
     CuTemp t;
+    char *base;
     char *p;
     char *q;
-    char *alone;
+    size_t off;
+    size_t held;
+    size_t attempts;
 
     cu_arena_init_with(&a, 64, 0);
+    base = cu_arena_push_bytes(&a, 1);
     p = cu_arena_push_bytes(&a, 8);
-    assert(p != NULL);
+    assert(base != NULL && p != NULL);
     fill_pattern(p, 8);
+    off = (size_t)(p - base);
     t = cu_temp_begin(&a);
     q = (char *)cu_arena_grow(&a, p, 8, 16);
-    assert(q != NULL && q != p && has_pattern(q, 8));
+    assert(q != NULL && q != base + off && has_pattern(q, 8));
     cu_temp_end(t);
-    /* The scope gave back what it took: p is the newest allocation again. */
-    q = (char *)cu_arena_grow(&a, p, 8, 16);
-    assert(q == p && has_pattern(p, 8));
+    /* The scope gave back what it took: the next push follows the old
+     * allocation, and with no scope open it grows in place. */
+    p = cu_arena_push_bytes(&a, 1);
+    assert(p == base + off + 8);
+    q = (char *)cu_arena_grow(&a, p, 1, 16);
+    assert(q == base + off + 8);
 
     /* Pushed inside the scope, it grows in place there. */
     t = cu_temp_begin(&a);
+    base = cu_arena_push_bytes(&a, 1);
     p = cu_arena_push_bytes(&a, 8);
-    assert(p != NULL);
+    assert(base != NULL && p != NULL);
+    off = (size_t)(p - base);
     q = (char *)cu_arena_grow(&a, p, 8, 16);
-    assert(q == p);
+    assert(q == base + off);
     cu_temp_end(t);
     cu_arena_release(&a);
 
-    /* Nor is a block reallocated whose allocation predates the scope. */
-    alone = cu_arena_push_bytes(&a, 64);
-    assert(alone != NULL);
-    fill_pattern(alone, 64);
+    /* Nor is a block reallocated whose allocation predates the scope: the
+     * grow takes a new block, more than the 436 bytes a reallocation would
+     * add, and ending the scope leaves only the old block held. */
+    p = cu_arena_push_bytes(&a, 64);
+    assert(p != NULL);
+    fill_pattern(p, 64);
+    held = a.held;
+    attempts = a.attempts;
     t = cu_temp_begin(&a);
-    q = (char *)cu_arena_grow(&a, alone, 64, 500);
-    assert(q != NULL && q != alone && has_pattern(q, 64));
+    q = (char *)cu_arena_grow(&a, p, 64, 500);
+    assert(q != NULL && has_pattern(q, 64));
+    assert(a.attempts == attempts + 1 && a.held >= held + 500);
     cu_temp_end(t);
-    assert(has_pattern(alone, 64));
+    assert(a.held == held);
     /* A scope begun at the start of a block reallocates it, and ending the
      * scope frees the block's bytes. */
     t = cu_temp_begin(&a);
@@ -445,20 +476,24 @@ static void test_grow_respects_temp_scopes(void)
     q = (char *)cu_arena_grow(&a, p, 64, 500);
     assert(q != NULL);
     cu_temp_end(t);
-    assert(has_pattern(alone, 64));
+    assert(a.held == held);
     assert(!cu_arena_failed(&a));
     cu_arena_release(&a);
 }
 
 /* A grow that needs memory fails like a push: NULL, the arena marked, and
  * p untouched and still valid. A limit refusal records the bytes the grow
- * needed, so held + refused is again the smallest cap that lets it pass. */
+ * needed, so held + refused is again the smallest cap that lets it pass.
+ * The two reads of p after a failed grow test that documented guarantee on
+ * purpose; the regions contract (consumes p) reports them, since it treats
+ * p as dead on every path. */
 static void test_grow_failure(int debug)
 {
     CuArena a;
     char *p;
     char *q;
     size_t held;
+    size_t need;
 
     cu_arena_init_with(&a, 64, debug);
     p = cu_arena_push_bytes(&a, 64);
@@ -477,7 +512,14 @@ static void test_grow_failure(int debug)
     cu_arena_set_limit(&a, held + 100);
     assert(cu_arena_grow(&a, p, 64, 200) == NULL);
     assert(cu_arena_failed(&a) && a.refused == 200 - 64 && a.held == held && has_pattern(p, 64));
-    cu_arena_set_limit(&a, a.held + a.refused);
+    need = a.held + a.refused;
+    cu_arena_release(&a);
+    /* The same grow under that cap passes, from a fresh arena: the regions
+     * contract has the grow consume p even when it fails. */
+    cu_arena_set_limit(&a, need);
+    p = cu_arena_push_bytes(&a, 64);
+    assert(p != NULL && a.held == held);
+    fill_pattern(p, 64);
     q = (char *)cu_arena_grow(&a, p, 64, 200);
     assert(q != NULL && has_pattern(q, 64) && a.held == a.limit);
     cu_arena_release(&a);
@@ -532,17 +574,20 @@ static void test_grow_zero_size_before_scope(void)
     char *g;
     char *later;
 
-    /* z at an odd offset: a fresh, aligned push cannot start there, so
-     * g != z shows the grow did not happen in place. */
+    /* z at an odd offset: a fresh, aligned push cannot start there, so an
+     * aligned g shows the grow did not happen in place. */
     cu_arena_init_with(&a, 4096, 0);
     assert(cu_arena_push_bytes(&a, 7) != NULL);
     z = cu_arena_push_bytes(&a, 0);
-    assert(z != NULL);
+    assert(z != NULL && !is_max_aligned(z));
     t = cu_temp_begin(&a);
     g = (char *)cu_arena_grow(&a, z, 0, 16);
-    assert(g != NULL && g != z);
+    assert(g != NULL && is_max_aligned(g));
     cu_temp_end(t);
-    /* Outside the scope, a zero-size allocation still gets fresh memory. */
+    /* Outside the scope, a zero-size allocation in the same place still
+     * gets fresh memory. */
+    z = cu_arena_push_bytes(&a, 0);
+    assert(z != NULL && !is_max_aligned(z));
     g = (char *)cu_arena_grow(&a, z, 0, 16);
     assert(g != NULL);
     memcpy(g, "outer-data-xxxx", 16);

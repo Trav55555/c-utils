@@ -164,11 +164,14 @@ CU_MUST_USE char *cu_arena_push_bytes(CuArena *a, size_t n);
  * pointer into its bytes, and any zero-size allocation at p's address are
  * invalid unless p is returned, so copy anything still needed from them
  * first. Pointers to other allocations are unaffected. On failure it
- * returns NULL, marks the arena failed, and p keeps its bytes. Memory from
+ * returns NULL, marks the arena failed, and p keeps its bytes. Even so,
+ * treat p as dead after every call and use only the result: the regions
+ * contract says consumes p, on every path, so the regions check reports a
+ * use of the variable passed as p until it is assigned again. Memory from
  * before the innermost temp scope is never grown in place or reallocated
  * (nor is the block that scope began in), so ending the scope frees exactly
  * what was pushed in it. old_size 0 always gets a new push. */
-/** regions: returns alloc(a); requires p in a; modifies arena(a) */
+/** regions: returns alloc(a); requires p in a; modifies arena(a); consumes p */
 CU_MUST_USE void *cu_arena_grow(CuArena *a, void *p, size_t old_size, size_t new_size);
 
 /* Grows p (old_size bytes from a, not NULL) to new_size bytes in place, as
