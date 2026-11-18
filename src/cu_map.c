@@ -29,7 +29,10 @@ typedef union {
 
 #define CU_HASH_MASK 0xFFFFFFFFUL
 
-unsigned long cu_hash_fnv1a(CuStr s)
+/* cu_hash_fnv1a with a frame: an insertion hashes its key between reading
+ * the map's arena and allocating in it. */
+/** regions: borrows; modifies none */
+static unsigned long fnv1a(CuStr s)
 {
     unsigned long h;
     size_t i;
@@ -40,6 +43,11 @@ unsigned long cu_hash_fnv1a(CuStr s)
         h = (h * 0x01000193UL) & CU_HASH_MASK;
     }
     return h;
+}
+
+unsigned long cu_hash_fnv1a(CuStr s)
+{
+    return fnv1a(s);
 }
 
 void cu_map_init(CuMap *m, CuArena *a, size_t value_size)
@@ -77,6 +85,7 @@ static char *value_of(CuMapNode *n)
 
 /* Whether n holds key, whose hash is h. Most nodes on a path differ in
  * hash, so their key bytes are never read. */
+/** regions: borrows; modifies none */
 static int holds(const CuMapNode *n, CuStr key, unsigned long h)
 {
     return n->hash == h && n->key.len == key.len && memcmp(n->key.ptr, key.ptr, key.len) == 0;
@@ -85,13 +94,15 @@ static int holds(const CuMapNode *n, CuStr key, unsigned long h)
 /* The link that holds key's node, or the empty link where it belongs. The
  * top two bits of the hash pick each child; after 16 levels the hash is
  * spent and every key left on the path goes to child 0, a list. */
+/** regions: returns view(link); returns view(*link); modifies none */
 static CuMapNode **find(CuMapNode **link, CuStr key, unsigned long h)
 {
     unsigned long bits;
+    CuMapNode *n;
 
     bits = h;
-    while (*link != NULL && !holds(*link, key, h)) {
-        link = &(*link)->child[bits >> 30];
+    for (n = *link; n != NULL && !holds(n, key, h); n = *link) {
+        link = &n->child[bits >> 30];
         bits = (bits << 2) & CU_HASH_MASK;
     }
     return link;
@@ -100,6 +111,7 @@ static CuMapNode **find(CuMapNode **link, CuStr key, unsigned long h)
 static CuMapNode *insert(CuMap *m, CuMapNode **link, CuStr key, unsigned long h, const void *init)
 {
     CuMapNode *n;
+    CuMapNode *last;
     char *bytes;
     size_t size;
 
@@ -110,6 +122,9 @@ static CuMapNode *insert(CuMap *m, CuMapNode **link, CuStr key, unsigned long h,
     n = (CuMapNode *)cu_arena_push(m->arena, 1, size);
     if (n == NULL)
         return NULL;
+    /* Read before the calls below: the regions check cannot see that
+     * they leave the map alone. */
+    last = m->last;
     bytes = value_of(n) + m->value_size;
     memcpy(value_of(n), init, m->value_size);
     if (key.len != 0)
@@ -121,8 +136,8 @@ static CuMapNode *insert(CuMap *m, CuMapNode **link, CuStr key, unsigned long h,
     n->next = NULL;
     n->key = cu_str_n(bytes, key.len);
     n->hash = h;
-    if (m->last != NULL)
-        m->last->next = n;
+    if (last != NULL)
+        last->next = n;
     else
         m->first = n;
     m->last = n;
@@ -143,8 +158,9 @@ void *cu_map_upsert_(CuMap *m, CuStr key, const void *init, size_t init_size, si
      * whatever the keys. */
     if (m->arena->scope != m->scope)
         abort();
-    h = cu_hash_fnv1a(key);
-    link = find(&m->root, key, h);
+    h = fnv1a(key);
+    link = &m->root;
+    link = find(link, key, h);
     if (*link != NULL)
         return value_of(*link);
     if (m->failed)

@@ -597,6 +597,7 @@ unsigned long cu_hash_fnv1a(CuStr s);
  * reports it. */
 typedef struct CuMapNode CuMapNode;
 
+/** regions: allocates in arena */
 typedef struct CuMap {
     CuArena *arena;
     CuMapNode *root;
@@ -633,7 +634,7 @@ int cu_map_failed(const CuMap *m);
 /** regions: returns view(*m) */
 CuMapIter cu_map_iter(const CuMap *m);
 
-/** regions: allocates in m; stores *init in *m; returns view(*m) */
+/** regions: allocates in m; stores *init in *m; grows *m; returns view(*m); returns alloc(*m) */
 void *cu_map_upsert_(CuMap *m, CuStr key, const void *init, size_t init_size, size_t value_size);
 /** regions: returns view(*m) */
 void *cu_map_get_(const CuMap *m, CuStr key, size_t value_size);
@@ -699,7 +700,7 @@ int cu_pool_failed(const CuPool *p);
 CuHandle cu_handle_null(void);
 int cu_handle_is_null(CuHandle h);
 
-/** regions: allocates in p; stores *v in *p */
+/** regions: allocates in p; stores *v in *p; grows *p */
 CU_MUST_USE CuHandle cu_pool_add_(CuPool *p, const void *v, size_t value_size);
 /** regions: returns view(*p) */
 void *cu_pool_get_(const CuPool *p, CuHandle h, size_t value_size);
@@ -742,7 +743,7 @@ typedef struct CuPlex {
 
 /** regions: binds px to a */
 void cu_plex_init(CuPlex *px, CuArena *a);
-/** regions: allocates in px */
+/** regions: allocates in px; grows *px */
 CU_MUST_USE unsigned cu_plex_kind(CuPlex *px, size_t node_size);
 /* Removes link's node. Returns 0, changing nothing, if link is null, stale
  * or names an unknown kind. */
@@ -755,7 +756,7 @@ int cu_link_is_null(CuLink link);
 /* Whether a and b name the same node; a stale link still equals itself. */
 int cu_link_eq(CuLink a, CuLink b);
 
-/** regions: allocates in px; stores *v in *px */
+/** regions: allocates in px; stores *v in *px; grows *px */
 CU_MUST_USE CuLink cu_plex_add_(CuPlex *px, unsigned kind, const void *v, size_t node_size);
 /** regions: returns view(*px) */
 void *cu_plex_get_(const CuPlex *px, unsigned kind, CuLink link, size_t node_size);
@@ -1032,6 +1033,7 @@ typedef struct CuDirEntry {
     CuDirKind kind;
 } CuDirEntry;
 
+/** regions: allocates in arena */
 typedef struct CuDir {
     void *handle; /* the platform's directory stream, or NULL */
     CuArena *arena;
@@ -1046,7 +1048,7 @@ CU_MUST_USE int cu_dir_open(CuDir *d, CuArena *a, const char *path);
 /* Stores the next entry in *e and returns 1, returns 0 at the end, or -1
  * on an error, leaving *e unchanged for 0 and -1. Calls after cu_dir_close
  * abort. */
-/** regions: allocates in d; writes *e view(*d) */
+/** regions: allocates in d; writes *e alloc(*d) */
 int cu_dir_next(CuDir *d, CuDirEntry *e);
 /* Releases the stream. Idempotent; names already returned stay valid. */
 /** regions: borrows */

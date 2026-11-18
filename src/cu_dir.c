@@ -121,6 +121,7 @@ int cu_dir_next(CuDir *d, CuDirEntry *e)
 {
     struct dirent *ent;
     CuDirKind kind;
+    CuArena *arena;
     const char *name;
     size_t len;
 
@@ -128,6 +129,9 @@ int cu_dir_next(CuDir *d, CuDirEntry *e)
         abort();
     if (d->state == -1)
         return -1;
+    /* The arena the names go into, read before the calls below: the
+     * regions check cannot see that they leave d alone. */
+    arena = d->arena;
     do {
         errno = 0;
         ent = readdir((DIR *)d->handle);
@@ -137,7 +141,7 @@ int cu_dir_next(CuDir *d, CuDirEntry *e)
     if (!entry_kind((DIR *)d->handle, ent, &kind))
         return fail(d, errno);
     len = strlen(ent->d_name);
-    name = cu_str_cstr_copy(d->arena, cu_str_n(ent->d_name, len));
+    name = cu_str_cstr_copy(arena, cu_str_n(ent->d_name, len));
     if (name == NULL)
         return fail(d, 0);
     e->name = cu_str_n(name, len);
