@@ -122,7 +122,7 @@ int cu_dir_next(CuDir *d, CuDirEntry *e)
     struct dirent *ent;
     CuDirKind kind;
     CuArena *arena;
-    char *name;
+    const char *name;
     size_t len;
 
     if (d == NULL || e == NULL || d->state == 0)
@@ -141,15 +141,9 @@ int cu_dir_next(CuDir *d, CuDirEntry *e)
     if (!entry_kind((DIR *)d->handle, ent, &kind))
         return fail(d, errno);
     len = strlen(ent->d_name);
-    /* Copied here rather than with cu_str_cstr_copy, whose contract says
-     * nothing of the containers it leaves alone: allocates in d promises
-     * callers that this call rebinds none (regions). d_name is an array,
-     * so len + 1 cannot overflow. */
-    name = cu_arena_push_bytes(arena, len + 1);
+    name = cu_str_cstr_copy(arena, cu_str_n(ent->d_name, len));
     if (name == NULL)
         return fail(d, 0);
-    memcpy(name, ent->d_name, len);
-    name[len] = '\0';
     e->name = cu_str_n(name, len);
     e->kind = kind;
     return 1;

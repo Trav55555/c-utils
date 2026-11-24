@@ -261,7 +261,7 @@ CuStr cu_str_n(const char *ptr, size_t len);
 /* NULL gives the empty string. */
 /** regions: returns view(s); modifies none */
 CuStr cu_str_cstr(const char *s);
-/** regions: returns static */
+/** regions: returns static; modifies none */
 CuStr cu_str_empty(void);
 
 /** regions: borrows; modifies none */
@@ -303,10 +303,10 @@ int cu_str_cut(CuStr s, CuStr sep, CuStr *before, CuStr *after);
 
 /* Copies into a. On failure returns the empty string and marks a failed, so
  * check cu_arena_failed when an empty result is possible. */
-/** regions: returns alloc(a) */
+/** regions: returns alloc(a); keeps arenas */
 CU_MUST_USE CuStr cu_str_copy(CuArena *a, CuStr s);
 /* NUL-terminated copy for C APIs. Returns NULL on failure. */
-/** regions: returns alloc(a) */
+/** regions: returns alloc(a); keeps arenas */
 CU_MUST_USE const char *cu_str_cstr_copy(CuArena *a, CuStr s);
 
 /* ASCII classification. Safe for any char value, including negative ones;
