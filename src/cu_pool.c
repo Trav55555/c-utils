@@ -98,7 +98,10 @@ static CuSlot *slot_of(const CuPool *p, size_t index)
     return (CuSlot *)(void *)(page + index % CU_PAGE_SLOTS * p->stride);
 }
 
-static void *value_of(CuSlot *s)
+/* A slot's value, as bytes: the pool only copies values in and out whole.
+ * Through a void * the regions check would take the copy in cu_pool_add_
+ * for a write that may rebind a container, which its contract rules out. */
+static char *value_of(CuSlot *s)
 {
     return (char *)s + VALUE_OFFSET;
 }

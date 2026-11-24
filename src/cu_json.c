@@ -704,8 +704,11 @@ static void check_keys(CuJsonOut *o, size_t depth)
             if (cu_str_eq(quoted_at(o->b.data, at[i - 1]), quoted_at(o->b.data, at[i])))
                 o->failed = 1;
     }
-    while (cu_vec_len(&o->keys) > first && CU_VEC_POP(&o->keys, &i))
-        continue;
+    /* Truncated rather than popped one by one: a pop copies each key out
+     * through a void *, which for the regions check may rebind a
+     * container, and end appends to the builder after this. */
+    if (cu_vec_len(&o->keys) > first)
+        o->keys.len = first;
 }
 
 static void end(CuJsonOut *o, int object)

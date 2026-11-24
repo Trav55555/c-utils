@@ -12,6 +12,7 @@ static union {
     void *p;
 } empty_storage;
 
+/** regions: borrows; modifies none */
 static void check_size(const CuVec *v, size_t elem_size)
 {
     if (v == NULL || elem_size != v->elem_size)

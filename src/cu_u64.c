@@ -3,6 +3,7 @@
 
 #define M32 0xFFFFFFFFUL
 
+/** regions: borrows; modifies none */
 static void check(CuU64 v)
 {
     if (v.hi > M32 || v.lo > M32)

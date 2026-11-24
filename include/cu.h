@@ -62,7 +62,7 @@ typedef struct CuU64 {
     unsigned long lo;
 } CuU64;
 
-/** regions: borrows */
+/** regions: borrows; modifies none */
 CuU64 cu_u64(unsigned long hi, unsigned long lo);
 /* Any unsigned long or size_t, including one wider than 32 bits. A value
  * that needs more than 64 bits aborts. */
@@ -256,15 +256,15 @@ typedef struct CuStr {
 #define CU_LIT(s) cu_str_n("" s "", sizeof("" s "") - 1)
 
 /* ptr may be NULL only when len is 0. */
-/** regions: returns view(ptr) */
+/** regions: returns view(ptr); modifies none */
 CuStr cu_str_n(const char *ptr, size_t len);
 /* NULL gives the empty string. */
-/** regions: returns view(s) */
+/** regions: returns view(s); modifies none */
 CuStr cu_str_cstr(const char *s);
 /** regions: returns static */
 CuStr cu_str_empty(void);
 
-/** regions: borrows */
+/** regions: borrows; modifies none */
 int cu_str_eq(CuStr a, CuStr b);
 /* Aborts when i >= s.len. */
 /** regions: borrows */
@@ -520,9 +520,9 @@ void cu_vec_init(CuVec *v, CuArena *a, size_t elem_size);
  * without allocating. */
 /** regions: allocates in v */
 int cu_vec_reserve(CuVec *v, size_t extra);
-/** regions: borrows */
+/** regions: borrows; modifies none */
 size_t cu_vec_len(const CuVec *v);
-/** regions: borrows */
+/** regions: borrows; modifies none */
 int cu_vec_failed(const CuVec *v);
 /* Sets len to 0 and keeps the storage. */
 /** regions: borrows */
@@ -532,9 +532,9 @@ void cu_vec_clear(CuVec *v);
 void cu_vec_push_(CuVec *v, const void *elem, size_t elem_size);
 /** regions: writes *out view(*v) */
 int cu_vec_pop_(CuVec *v, void *out, size_t elem_size);
-/** regions: returns view(*v) */
+/** regions: returns view(*v); modifies none */
 void *cu_vec_at_(const CuVec *v, size_t i, size_t elem_size);
-/** regions: returns view(*v) */
+/** regions: returns view(*v); modifies none */
 void *cu_vec_data_(const CuVec *v, size_t elem_size);
 
 /* ---- Slices ------------------------------------------------------------ */
@@ -697,7 +697,9 @@ int cu_pool_remove(CuPool *p, CuHandle h);
 size_t cu_pool_len(const CuPool *p);
 /** regions: borrows */
 int cu_pool_failed(const CuPool *p);
+/** regions: modifies none */
 CuHandle cu_handle_null(void);
+/** regions: modifies none */
 int cu_handle_is_null(CuHandle h);
 
 /** regions: allocates in p; stores *v in *p; grows *p */
@@ -909,7 +911,7 @@ CU_MUST_USE int cu_base64_decode(CuArena *a, CuStr text, CuStr *out);
 
 /* The Adler-32 of data continued from adler; start a sum with 1. An adler
  * that no sum can be aborts. */
-/** regions: borrows */
+/** regions: borrows; modifies none */
 unsigned long cu_adler32(unsigned long adler, CuStr data);
 /** regions: allocates in b */
 void cu_sb_zlib(CuBuilder *b, CuStr data);
