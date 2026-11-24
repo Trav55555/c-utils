@@ -343,8 +343,10 @@ void mark_escape_html(CuBuilder *b, CuStr s)
 
 /* The CopyOnWriteBuffer pattern: a stage that never writes returns its
  * input unchanged; one that did write appends the tail and returns the new
- * bytes. */
-/** regions: allocates in b; writes *b view(*b); returns view(*b); returns view(v) */
+ * bytes. No written regions contract: its body both grows b and finishes
+ * it, and cu_sb_finish promises nothing about the containers it leaves
+ * alone, so allocates in b could not be kept; the summary regions infers
+ * says what the body does. */
 static CuStr cow_finish(CuBuilder *b, CuStr v, int copied, size_t n)
 {
     CuStr out;
