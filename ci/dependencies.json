@@ -1,7 +1,7 @@
 {
   "schema": "c-utils.ci-dependencies/1",
   "dependable-c-agent-toolchain": {
-    "revision": "f48486a3a68cfa21bc2c230cb4754b4e78519230",
-    "tree": "ff98b03e21a3b2ef6218f300332084326e453a54"
+    "revision": "0245346f4e53d667716450d7a2b2247508bec8cf",
+    "tree": "e2e1502aafe526ccaa680ac9d5d170d90bf9afa7"
   }
 }
